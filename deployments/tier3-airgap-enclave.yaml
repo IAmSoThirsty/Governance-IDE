@@ -1,0 +1,26 @@
+version: 1
+name: tier3-airgap-enclave
+profile: tier3
+controls:
+  outbound_network: disabled
+  import_export_via_signed_bundles: true
+  attested_scanner_required: true
+  unmanaged_artifact_ingest: denied
+components:
+  ingress:
+    transfer_manifest_schema: schemas/transfer_manifest.schema.json
+    bundle_guard: src/sovereign_ide/airgap.py
+  governance:
+    fail_closed_on_audit_write_failure: true
+    compensation_only_rollback: true
+  supply_chain:
+    enclave_allowed_requires_attestation: true
+    provenance_required: true
+operational_requirements:
+  bundle_requirements:
+    - valid_checksum_format
+    - valid_signature_verification
+    - required_approvers_present
+    - decision_record_reference_present
+  recovery:
+    rollback_mode: compensation_transactions

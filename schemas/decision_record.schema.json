@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sovereign-ide.local/schemas/decision_record.schema.json",
+  "title": "DecisionRecord",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "decision_id",
+    "trace_id",
+    "action",
+    "resource",
+    "mutation_class",
+    "outcome",
+    "reason",
+    "policy_evaluation_id",
+    "binding_id",
+    "capability_token_id",
+    "governance_context_hash",
+    "resolution_policy",
+    "created_at",
+    "signature"
+  ],
+  "properties": {
+    "decision_id": { "type": "string", "minLength": 1 },
+    "trace_id": { "type": "string", "minLength": 1 },
+    "action": { "type": "string", "minLength": 1 },
+    "resource": { "type": "string", "minLength": 1 },
+    "mutation_class": {
+      "type": "string",
+      "enum": ["read", "softMutation", "hardMutation", "governanceMutation"]
+    },
+    "outcome": {
+      "type": "string",
+      "enum": ["approved", "denied", "compensated"]
+    },
+    "reason": { "type": "string", "minLength": 1 },
+    "policy_evaluation_id": { "type": "string", "minLength": 1 },
+    "binding_id": { "type": "string", "minLength": 1 },
+    "capability_token_id": { "type": "string", "minLength": 1 },
+    "governance_context_hash": {
+      "type": "string",
+      "pattern": "^[a-fA-F0-9]{64}$"
+    },
+    "resolution_policy": { "type": "string", "minLength": 1 },
+    "quorum_proof": { "type": ["string", "null"] },
+    "previous_decision_hash": {
+      "type": ["string", "null"],
+      "pattern": "^[a-fA-F0-9]{64}$"
+    },
+    "created_at": { "type": "string", "format": "date-time" },
+    "signature": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["algorithm", "key_id", "signature", "signed_at"],
+      "properties": {
+        "algorithm": { "type": "string", "minLength": 1 },
+        "key_id": { "type": "string", "minLength": 1 },
+        "signature": { "type": "string", "minLength": 1 },
+        "signed_at": { "type": "string", "format": "date-time" }
+      }
+    }
+  }
+}

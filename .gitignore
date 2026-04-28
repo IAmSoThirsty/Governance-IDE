@@ -1,0 +1,24 @@
+
+# Ignore VS Code AI rules path
+.github\instructions\codacy.instructions.md
+
+# Python cache and virtualenv
+__pycache__/
+*.pyc
+.venv/
+
+# Runtime state and logs
+state/
+*.log
+
+# Local secrets and environment files
+.env
+.env.*
+!.env.example
+.secrets/
+
+# Local analysis output
+.codacy/logs/
+
+# Generated integration reports
+integration/out/*.json

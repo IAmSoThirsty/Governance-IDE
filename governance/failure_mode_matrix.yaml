@@ -1,0 +1,79 @@
+version: 1.0.0
+failureModes:
+  - mode: no_model_operation
+    trigger: model_gateway_unavailable
+    availability:
+      readOnlyAnalysis: true
+      mutationOperations: false
+      retrieval: true
+    failBehavior:
+      policy: fail-closed
+      execution: deny
+    recovery:
+      action: restore_model_gateway
+      compensationRequired: false
+
+  - mode: retrieval_degraded
+    trigger: retrieval_index_corrupted
+    availability:
+      readOnlyAnalysis: true
+      mutationOperations: false
+      retrieval: limited
+    failBehavior:
+      policy: fail-closed
+      execution: deny
+    recovery:
+      action: rebuild_index_from_verified_sources
+      compensationRequired: false
+
+  - mode: stale_identity
+    trigger: capability_token_expired_or_revoked
+    availability:
+      readOnlyAnalysis: true
+      mutationOperations: false
+      retrieval: true
+    failBehavior:
+      policy: fail-closed
+      execution: deny
+    recovery:
+      action: re-attest_and_issue_new_token
+      compensationRequired: false
+
+  - mode: policy_service_outage
+    trigger: policy_engine_unreachable
+    availability:
+      readOnlyAnalysis: true
+      mutationOperations: false
+      retrieval: true
+    failBehavior:
+      policy: fail-closed
+      execution: deny
+    recovery:
+      action: restore_policy_service_and_replay_queue
+      compensationRequired: false
+
+  - mode: audit_storage_exhaustion
+    trigger: append_only_journal_unwritable
+    availability:
+      readOnlyAnalysis: true
+      mutationOperations: false
+      retrieval: true
+    failBehavior:
+      policy: fail-closed
+      execution: stop_all_writes
+    recovery:
+      action: expand_storage_and_verify_hash_chain
+      compensationRequired: false
+
+  - mode: extension_subsystem_quarantine
+    trigger: malicious_extension_detected
+    availability:
+      readOnlyAnalysis: true
+      mutationOperations: restricted
+      retrieval: true
+    failBehavior:
+      policy: fail-closed_for_extension_calls
+      execution: deny_extension_execution
+    recovery:
+      action: revoke_extension_and_rebuild_trust_bundle
+      compensationRequired: true

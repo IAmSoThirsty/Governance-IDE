@@ -1,0 +1,31 @@
+{
+  "version": "1.0.0",
+  "artifactType": "extension",
+  "tiers": [
+    "community",
+    "enterprise-reviewed",
+    "sovereign-approved",
+    "enclave-allowed"
+  ],
+  "requirements": {
+    "enterprise-reviewed": [
+      "signature_verified",
+      "static_scan_passed",
+      "dependency_scan_passed"
+    ],
+    "sovereign-approved": [
+      "signature_verified",
+      "static_scan_passed",
+      "dependency_scan_passed",
+      "provenance_verified"
+    ],
+    "enclave-allowed": [
+      "signature_verified",
+      "static_scan_passed",
+      "dependency_scan_passed",
+      "provenance_verified",
+      "airgap_manifest_approved",
+      "attested_workload_required"
+    ]
+  }
+}

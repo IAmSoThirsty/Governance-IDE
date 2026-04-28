@@ -1,0 +1,53 @@
+version: 1.0.0
+events:
+  governance:
+    - policy_evaluation_request
+    - policy_evaluation_result
+    - governance_evaluation_binding
+    - mutation_governance_binding_validated
+    - decision_record
+    - compensation_transaction
+    - audit_event
+
+  execution:
+    - tool_execution_started
+    - tool_execution_completed
+    - patch_proposed
+    - patch_validated
+    - patch_applied
+    - sandbox_tests_passed
+    - sandbox_tests_failed
+
+  retrieval:
+    - retrieval_query_received
+    - retrieval_candidate_selected
+    - retrieval_chunk_rejected_boundary
+    - retrieval_chunk_accepted
+    - prompt_assembled
+
+  supply_chain:
+    - artifact_registered
+    - artifact_promoted
+    - artifact_revoked
+    - provenance_verified
+    - attestation_verified
+
+  federation:
+    - trust_bundle_imported
+    - trust_bundle_revoked
+    - cross_domain_exchange_requested
+    - cross_domain_exchange_approved
+    - cross_domain_exchange_denied
+
+severity:
+  info:
+    - patch_proposed
+    - prompt_assembled
+    - artifact_registered
+  warn:
+    - retrieval_chunk_rejected_boundary
+    - sandbox_tests_failed
+  critical:
+    - policy_bypass_detected
+    - unsigned_artifact_detected
+    - decision_signature_invalid

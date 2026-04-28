@@ -1,0 +1,74 @@
+{
+  "version": "1.0.0",
+  "resolution": {
+    "default": "deny",
+    "precedence": [
+      "invariants",
+      "immutableDecisionRecord",
+      "policyEvaluation",
+      "capabilityToken",
+      "runtimeConfiguration",
+      "operatorOverride"
+    ]
+  },
+  "workspace": {
+    "allowed_roots": [
+      "t:/Sovereign IDE"
+    ]
+  },
+  "risk_scores": {
+    "read": 10,
+    "softMutation": 35,
+    "hardMutation": 70,
+    "governanceMutation": 90
+  },
+  "actions": {
+    "apply_patch": {
+      "required_mutation_class": "hardMutation",
+      "allowed_roles": [
+        "developer",
+        "reviewer"
+      ],
+      "quorum_required": true,
+      "risk_score": 75
+    },
+    "run_tests": {
+      "required_mutation_class": "softMutation",
+      "allowed_roles": [
+        "developer",
+        "reviewer",
+        "security_reviewer"
+      ],
+      "quorum_required": false,
+      "risk_score": 35
+    },
+    "promote_artifact": {
+      "required_mutation_class": "governanceMutation",
+      "allowed_roles": [
+        "model_steward",
+        "extension_steward",
+        "release_authority"
+      ],
+      "quorum_required": true,
+      "risk_score": 90
+    },
+    "import_airgap_bundle": {
+      "required_mutation_class": "governanceMutation",
+      "allowed_roles": [
+        "enclave_operator",
+        "trust_administrator"
+      ],
+      "quorum_required": true,
+      "risk_score": 95
+    },
+    "compensate:apply_patch": {
+      "required_mutation_class": "governanceMutation",
+      "allowed_roles": [
+        "incident_responder",
+        "release_authority"
+      ],
+      "quorum_required": false,
+      "risk_score": 85
+    }
+  }
+}

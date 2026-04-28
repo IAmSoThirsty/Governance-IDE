@@ -1,0 +1,24 @@
+version: 1
+name: tier4-national-federation
+profile: tier4
+controls:
+  trust_domain_federation: constrained
+  cross_domain_exchange_default: deny
+  unknown_classification_policy: deny
+  sovereign_autonomy_preserved: true
+components:
+  federation:
+    policy_engine: src/sovereign_ide/federation.py
+    exchange_ledger: append_only
+    quorum_for_cross_domain_exchange: true
+  governance:
+    immutable_decisions_required: true
+    replayable_audit_chain_required: true
+operational_requirements:
+  exchange_prerequisites:
+    - trusted_source_domain
+    - trusted_target_domain
+    - rule_defined_for_domain_pair
+    - classification_within_rule
+    - exportability_constraints_met
+    - quorum_obligation_satisfied

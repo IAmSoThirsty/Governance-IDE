@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sovereign-ide.local/schemas/policy_pack.schema.json",
+  "title": "PolicyPack",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "resolution", "workspace", "risk_scores", "actions"],
+  "properties": {
+    "version": { "type": "string", "minLength": 1 },
+    "resolution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["default", "precedence"],
+      "properties": {
+        "default": { "type": "string", "const": "deny" },
+        "precedence": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "workspace": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["allowed_roots"],
+      "properties": {
+        "allowed_roots": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "risk_scores": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["read", "softMutation", "hardMutation", "governanceMutation"],
+      "properties": {
+        "read": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "softMutation": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "hardMutation": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "governanceMutation": { "type": "integer", "minimum": 0, "maximum": 100 }
+      }
+    },
+    "actions": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["required_mutation_class", "allowed_roles", "quorum_required"],
+        "properties": {
+          "required_mutation_class": {
+            "type": "string",
+            "enum": ["read", "softMutation", "hardMutation", "governanceMutation"]
+          },
+          "allowed_roles": {
+            "type": "array",
+            "minItems": 1,
+            "items": { "type": "string", "minLength": 1 },
+            "uniqueItems": true
+          },
+          "quorum_required": { "type": "boolean" },
+          "risk_score": { "type": "integer", "minimum": 0, "maximum": 100 }
+        }
+      }
+    }
+  }
+}

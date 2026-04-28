@@ -1,0 +1,144 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sovereign-ide.local/schemas/mutation_governance_binding.schema.json",
+  "title": "MutationGovernanceBinding",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "trace_id",
+    "action",
+    "resource",
+    "mutation_class",
+    "capability_token",
+    "governance_context",
+    "policy_evaluation",
+    "evaluation_binding",
+    "resolution_policy"
+  ],
+  "properties": {
+    "trace_id": { "type": "string", "minLength": 1 },
+    "action": { "type": "string", "minLength": 1 },
+    "resource": { "type": "string", "minLength": 1 },
+    "mutation_class": {
+      "type": "string",
+      "enum": ["read", "softMutation", "hardMutation", "governanceMutation"]
+    },
+    "capability_token": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "token_id",
+        "subject",
+        "scopes",
+        "trust_domain",
+        "issued_at",
+        "expires_at",
+        "revoked"
+      ],
+      "properties": {
+        "token_id": { "type": "string", "minLength": 1 },
+        "subject": { "type": "string", "minLength": 1 },
+        "scopes": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "trust_domain": { "type": "string", "minLength": 1 },
+        "issued_at": { "type": "string", "format": "date-time" },
+        "expires_at": { "type": "string", "format": "date-time" },
+        "revoked": { "type": "boolean" }
+      }
+    },
+    "governance_context": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "trace_id",
+        "actor_id",
+        "actor_roles",
+        "tenant",
+        "trust_domain",
+        "workspace_root",
+        "classification",
+        "policy_pack_version"
+      ],
+      "properties": {
+        "trace_id": { "type": "string", "minLength": 1 },
+        "actor_id": { "type": "string", "minLength": 1 },
+        "actor_roles": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "tenant": { "type": "string", "minLength": 1 },
+        "trust_domain": { "type": "string", "minLength": 1 },
+        "workspace_root": { "type": "string", "minLength": 1 },
+        "classification": { "type": "string", "minLength": 1 },
+        "policy_pack_version": { "type": "string", "minLength": 1 }
+      }
+    },
+    "policy_evaluation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "evaluation_id",
+        "request_id",
+        "trace_id",
+        "allowed",
+        "denial_reasons",
+        "obligations",
+        "risk_score",
+        "matched_rules",
+        "policy_pack_version",
+        "evaluated_at"
+      ],
+      "properties": {
+        "evaluation_id": { "type": "string", "minLength": 1 },
+        "request_id": { "type": "string", "minLength": 1 },
+        "trace_id": { "type": "string", "minLength": 1 },
+        "allowed": { "type": "boolean" },
+        "denial_reasons": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "obligations": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "risk_score": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "matched_rules": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "policy_pack_version": { "type": "string", "minLength": 1 },
+        "evaluated_at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "evaluation_binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "binding_id",
+        "trace_id",
+        "request_id",
+        "evaluation_id",
+        "request_hash",
+        "context_hash",
+        "created_at"
+      ],
+      "properties": {
+        "binding_id": { "type": "string", "minLength": 1 },
+        "trace_id": { "type": "string", "minLength": 1 },
+        "request_id": { "type": "string", "minLength": 1 },
+        "evaluation_id": { "type": "string", "minLength": 1 },
+        "request_hash": { "type": "string", "pattern": "^[a-fA-F0-9]{64}$" },
+        "context_hash": { "type": "string", "pattern": "^[a-fA-F0-9]{64}$" },
+        "created_at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "resolution_policy": { "type": "string", "minLength": 1 },
+    "quorum_proof": { "type": ["string", "null"] }
+  }
+}

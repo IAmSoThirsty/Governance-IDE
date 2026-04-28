@@ -1,0 +1,55 @@
+version: 1.0.0
+mappings:
+  - operation: apply_patch
+    mutationClass: hardMutation
+    requiredRecords:
+      - PolicyEvaluationRequest
+      - PolicyEvaluationResult
+      - GovernanceEvaluationBinding
+      - MutationGovernanceBinding
+      - DecisionRecord
+      - AuditEvent
+    requiredApprovals:
+      quorum: true
+      rolesAnyOf:
+        - reviewer
+        - security_reviewer
+
+  - operation: promote_artifact
+    mutationClass: governanceMutation
+    requiredRecords:
+      - PolicyEvaluationRequest
+      - PolicyEvaluationResult
+      - GovernanceEvaluationBinding
+      - MutationGovernanceBinding
+      - DecisionRecord
+      - AuditEvent
+      - ArtifactLifecycleRecord
+    requiredApprovals:
+      quorum: true
+      rolesAnyOf:
+        - model_steward
+        - extension_steward
+        - release_authority
+
+  - operation: compensate:apply_patch
+    mutationClass: governanceMutation
+    requiredRecords:
+      - CompensationTransaction
+      - DecisionRecord
+      - AuditEvent
+    requiredApprovals:
+      quorum: false
+      rolesAnyOf:
+        - incident_responder
+        - release_authority
+
+resolution:
+  default: deny
+  precedence:
+    - invariants
+    - immutableDecisionRecord
+    - policyEvaluation
+    - capabilityToken
+    - runtimeConfiguration
+    - operatorOverride

@@ -1,0 +1,96 @@
+version: 1.0.0
+name: sovereign-ide-advanced-system-integration-contract
+owner: platform-governance
+summary: >-
+  Contract for integrating the Sovereign IDE governed runtime into an upstream
+  orchestrator or enterprise platform while preserving immutable governance,
+  default-deny policy, and compensation-only rollback semantics.
+
+runtime:
+  language: python
+  minimumPython: "3.11"
+  entrypoints:
+    cli:
+      module: sovereign_ide.cli
+      command: python -m sovereign_ide.cli
+      operations:
+        - init
+        - simulate-mutation
+        - compensate
+        - replay
+        - evaluate
+
+requiredEnvironment:
+  required:
+    - name: SOVEREIGN_SIGNING_KEY
+      constraints:
+        minLength: 64
+        notPlaceholder: true
+    - name: SOVEREIGN_POLICY_PATH
+    - name: SOVEREIGN_STATE_DIR
+
+controlInvariants:
+  - immutable_signed_decision_records
+  - complete_mutation_governance_binding
+  - policy_evaluation_bound_authorization
+  - append_only_replayable_audit
+  - compensation_only_rollback
+  - default_deny_resolution
+
+integrationInterfaces:
+  artifacts:
+    policyPack: policies/baseline_policy.json
+    governanceMappings: governance/enforcement_mappings.yaml
+    eventTaxonomy: governance/event_taxonomy.yaml
+    failureMatrix: governance/failure_mode_matrix.yaml
+    schemas:
+      - schemas/decision_record.schema.json
+      - schemas/mutation_governance_binding.schema.json
+      - schemas/policy_pack.schema.json
+      - schemas/transfer_manifest.schema.json
+      - schemas/trust_bundle.schema.json
+  deploymentProfiles:
+    - deployments/tier0-workstation.yaml
+    - deployments/tier1-enterprise.yaml
+    - deployments/tier3-airgap-enclave.yaml
+    - deployments/tier4-national-federation.yaml
+
+eventSurface:
+  governance:
+    - policy_evaluation_request
+    - policy_evaluation_result
+    - governance_evaluation_binding
+    - decision_record
+    - compensation_transaction
+    - audit_event
+  federation:
+    - cross_domain_exchange_requested
+    - cross_domain_exchange_approved
+    - cross_domain_exchange_denied
+  supplyChain:
+    - artifact_registered
+    - artifact_promoted
+    - artifact_revoked
+
+integrationSequence:
+  - step: provision-runtime-secrets
+    required: true
+  - step: run-preproduction-inspection
+    required: true
+  - step: run-advanced-integration-preflight
+    required: true
+  - step: bind-to-system-orchestrator
+    required: true
+  - step: enable-observability-and-audit-export
+    required: true
+
+rollbackPolicy:
+  destructiveRollbackAllowed: false
+  compensationRequired: true
+  compensationReference: decision_record_id
+
+admissionCriteria:
+  - preprod_inspection_exit_code_0
+  - advanced_integration_preflight_status_pass
+  - test_suite_passing
+  - security_analysis_clean

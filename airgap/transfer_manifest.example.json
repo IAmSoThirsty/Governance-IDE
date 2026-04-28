@@ -1,0 +1,38 @@
+{
+  "manifestVersion": "1.0.0",
+  "bundleId": "bundle_2026_04_28_001",
+  "sourceDomain": "enterprise-connected",
+  "targetDomain": "airgap-enclave",
+  "createdAt": "2026-04-28T00:00:00Z",
+  "classification": "sovereign",
+  "items": [
+    {
+      "artifactId": "model_llm_local_v4",
+      "artifactType": "model",
+      "checksum": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "provenanceRef": "attestation:model_llm_local_v4",
+      "promotionTier": "sovereign-approved"
+    },
+    {
+      "artifactId": "extension_secure_patch_engine_v2",
+      "artifactType": "extension",
+      "checksum": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "provenanceRef": "attestation:extension_secure_patch_engine_v2",
+      "promotionTier": "sovereign-approved"
+    }
+  ],
+  "signatures": [
+    {
+      "signer": "release_authority",
+      "algorithm": "hmac-sha256",
+      "signature": "MEUCIQC4YlVQ4f0A0OHGW8ccsQaM+e9wq4VOJQ8Q9h5mX4MHTQIgAkd6w5x6qzmr4jA3oK8m3Vt8x8J8P4D5aI4XvQ2Gx1U="
+    }
+  ],
+  "approval": {
+    "approvedBy": [
+      "enclave_operator",
+      "trust_administrator"
+    ],
+    "decisionRecordId": "decision_airgap_0001"
+  }
+}

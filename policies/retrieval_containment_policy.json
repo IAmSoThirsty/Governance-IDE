@@ -1,0 +1,36 @@
+{
+  "version": "1.0.0",
+  "boundaryRules": {
+    "allowCrossTenant": false,
+    "allowCrossTrustDomain": false,
+    "allowCrossProject": false,
+    "allowClassificationEscalation": false
+  },
+  "classificationOrder": [
+    "public",
+    "internal",
+    "confidential",
+    "secret",
+    "sovereign"
+  ],
+  "requiredChunkLabels": [
+    "tenant",
+    "project",
+    "trust_domain",
+    "classification",
+    "provenance_class",
+    "trust_score",
+    "embedding_lineage",
+    "exportable"
+  ],
+  "promptAssembly": {
+    "channels": [
+      "constitution",
+      "machine_policy",
+      "user_objective",
+      "evidence"
+    ],
+    "evidenceCanOverridePolicy": false,
+    "minTrustScore": 0.6
+  }
+}

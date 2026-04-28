@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sovereign-ide.local/schemas/trust_bundle.schema.json",
+  "title": "TrustBundle",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "bundle_id",
+    "trust_domain",
+    "issuer",
+    "issued_at",
+    "expires_at",
+    "policy_pack_version",
+    "policy_valid_until",
+    "posture_valid_until",
+    "provenance_valid_until",
+    "attestation_valid_until",
+    "revoked"
+  ],
+  "properties": {
+    "bundle_id": { "type": "string", "minLength": 1 },
+    "trust_domain": { "type": "string", "minLength": 1 },
+    "issuer": { "type": "string", "minLength": 1 },
+    "issued_at": { "type": "string", "format": "date-time" },
+    "expires_at": { "type": "string", "format": "date-time" },
+    "policy_pack_version": { "type": "string", "minLength": 1 },
+    "policy_valid_until": { "type": "string", "format": "date-time" },
+    "posture_valid_until": { "type": "string", "format": "date-time" },
+    "provenance_valid_until": { "type": "string", "format": "date-time" },
+    "attestation_valid_until": { "type": "string", "format": "date-time" },
+    "revoked": { "type": "boolean" }
+  }
+}

@@ -1,0 +1,29 @@
+version: 1
+name: tier1-enterprise-connected
+profile: tier1
+controls:
+  central_policy_distribution: true
+  internal_registry_only: true
+  extension_public_registry_allowed: false
+  workload_identity_required: true
+components:
+  endpoint:
+    local_runtime: true
+    policy_sync: scheduled
+  governance:
+    audit_export: enabled
+    replay_validation: required
+  supply_chain:
+    registry_mode: internal_only
+    promotion_tiers:
+      - community
+      - enterprise-reviewed
+      - sovereign-approved
+  federation:
+    trust_bundle_ingest: guarded
+operational_requirements:
+  approvals:
+    high_risk_mutations_require_quorum: true
+  monitoring:
+    policy_boundary_heatmap: enabled
+    trust_dimension_status: enabled

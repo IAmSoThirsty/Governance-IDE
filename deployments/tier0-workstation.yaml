@@ -1,0 +1,30 @@
+version: 1
+name: tier0-sovereign-workstation
+profile: tier0
+controls:
+  local_runtime_only: true
+  network_egress_default: deny
+  cloud_fallback_allowed: false
+  signed_binary_required: true
+  encrypted_local_state: true
+components:
+  endpoint:
+    shell: electron
+    workbench: theia
+    storage:
+      state_dir: state/
+      journal: state/governance_journal.jsonl
+  governance:
+    policy_pack: policies/baseline_policy.json
+    enforcement_mappings: governance/enforcement_mappings.yaml
+    failure_matrix: governance/failure_mode_matrix.yaml
+  intelligence:
+    retrieval_mode: local_hybrid
+    evidence_firewall: enabled
+operational_requirements:
+  mandatory_env:
+    - SOVEREIGN_SIGNING_KEY
+  startup_checks:
+    - journal_hash_chain_valid
+    - decision_signature_verification
+    - policy_default_deny

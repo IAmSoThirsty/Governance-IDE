@@ -1,0 +1,33 @@
+{
+  "version": "1.0.0",
+  "artifactType": "model",
+  "tiers": [
+    "community",
+    "enterprise-reviewed",
+    "sovereign-approved",
+    "enclave-allowed"
+  ],
+  "requirements": {
+    "enterprise-reviewed": [
+      "signature_verified",
+      "static_scan_passed",
+      "dependency_scan_passed",
+      "prompt_injection_eval_passed"
+    ],
+    "sovereign-approved": [
+      "signature_verified",
+      "static_scan_passed",
+      "dependency_scan_passed",
+      "provenance_verified",
+      "assurance_eval_non_regression"
+    ],
+    "enclave-allowed": [
+      "signature_verified",
+      "static_scan_passed",
+      "dependency_scan_passed",
+      "provenance_verified",
+      "airgap_manifest_approved",
+      "attested_workload_required"
+    ]
+  }
+}
