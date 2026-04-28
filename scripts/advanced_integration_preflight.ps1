@@ -50,6 +50,7 @@ try {
 
     $requiredPaths = @(
         "policies/baseline_policy.json",
+        "policies/workshop_policy.json",
         "governance/enforcement_mappings.yaml",
         "governance/event_taxonomy.yaml",
         "governance/failure_mode_matrix.yaml",
@@ -63,7 +64,16 @@ try {
         "schemas/transfer_manifest.schema.json",
         "schemas/trust_bundle.schema.json",
         "integration/system_integration_contract.yaml",
+        "integration/workshop_system_contract.yaml",
         "integration/advanced_integration_runbook.md",
+        "workshop/founding/server_charter_v1.json",
+        "workshop/founding/authority_chain.yaml",
+        "workshop/founding/mutation_classes.yaml",
+        "workshop/founding/model_promotion_law.yaml",
+        "workshop/services/workshop_cluster_topology.yaml",
+        "workshop/benchmarks/constitutional_benchmark_manifest.yaml",
+        "workshop/sprints/12_sprint_plan.yaml",
+        "scripts/local_quality_gate.ps1",
         "scripts/preprod_inspection.ps1"
     )
 
@@ -98,10 +108,14 @@ try {
 
     $env:PYTHONPATH = "src"
 
-    Invoke-Checked -FilePath $PythonExe -Arguments @(
-        "-m", "unittest", "discover", "-s", "tests", "-p", "test_*.py"
+    Invoke-Checked -FilePath "powershell" -Arguments @(
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File", "scripts/local_quality_gate.ps1",
+        "-PythonExe", $PythonExe
     )
-    Add-Check -Name "unit_tests" -Status "pass" -Detail "Test suite passed"
+    Add-Check -Name "local_quality_gate" -Status "pass" -Detail "Compile and test gates passed"
 
     Invoke-Checked -FilePath "powershell" -Arguments @(
         "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "scripts/preprod_inspection.ps1"

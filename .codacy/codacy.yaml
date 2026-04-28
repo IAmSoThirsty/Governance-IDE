@@ -1,6 +1,0 @@
-runtimes:
-    - python@3.11.11
-tools:
-    - pylint@3.3.6
-    - opengrep@1.16.4
-    - trivy@0.69.3

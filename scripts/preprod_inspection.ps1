@@ -84,9 +84,15 @@ if ($signingKey.Length -lt 64) {
 
 $env:PYTHONPATH = "src"
 
-Write-Host "[preprod] Running test suite"
-Invoke-Checked -FilePath $PythonExe -Arguments @(
-    "-m", "unittest", "discover", "-s", "tests", "-p", "test_*.py"
+Write-Host "[preprod] Running local quality gate"
+Invoke-Checked -FilePath "powershell" -Arguments @(
+    "-NoProfile",
+    "-ExecutionPolicy",
+    "Bypass",
+    "-File",
+    "scripts/local_quality_gate.ps1",
+    "-PythonExe",
+    $PythonExe
 )
 
 Write-Host "[preprod] Initializing runtime"
