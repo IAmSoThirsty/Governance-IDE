@@ -1,0 +1,7 @@
+version: 1
+policy: emergency-powers
+rules:
+  - emergency action must carry expiry
+  - emergency action cannot disable append-only audit
+  - emergency action cannot authorize self-escalation
+  - emergency action requires post-incident compensation review

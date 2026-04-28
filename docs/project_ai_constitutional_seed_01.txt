@@ -1,0 +1,16 @@
+Project-AI Constitutional Seed 01
+
+Containment-first doctrine:
+- High-risk actions are enforced below cognition using syscall-authoritative controls.
+- Runtime governance must be default-deny and immutable-decision anchored.
+- Mutation-capable actions require bounded capability scope and attributable identity.
+
+Continuity doctrine:
+- State continuity is a runtime invariant, not an optional convenience.
+- If continuity cannot be proven, the system must disclose discontinuity.
+- Identity persistence must preserve validated anchors and reject fabricated memory.
+
+Promotion doctrine:
+- Promotion requires evidence package, signed bundle, and quorum approval.
+- Shadow and primary evaluations must remain within divergence tolerance.
+- No self-authorization for privileged escalation.

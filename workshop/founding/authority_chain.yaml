@@ -1,0 +1,10 @@
+version: 1
+rootAuthority: Sovereign Covenant
+derivedAuthority:
+  - Server Charter v1.0
+  - Workshop Promotion Law v1.0
+  - Workshop Dataset Admissibility Law v1.0
+enforcement:
+  policyPlane: runtime-default-deny
+  decisionRecord: immutable-signed
+  rollback: compensation-only

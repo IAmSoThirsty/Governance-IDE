@@ -1,0 +1,46 @@
+version: 1.0.0
+name: project-ai-sovereign-model-server-integration
+summary: >-
+  System-level contract for integrating the sovereign constitutional model
+  workshop into external orchestration and deployment infrastructure.
+
+entrypoints:
+  cliModule: sovereign_ide.cli
+  workshopCommands:
+    - workshop-init
+    - workshop-ingest
+    - workshop-build-datasets
+    - workshop-train
+    - workshop-eval
+    - workshop-promote
+    - workshop-register-repair
+    - workshop-apply-repair
+    - workshop-containment-check
+    - workshop-report
+
+requiredPolicies:
+  - policies/workshop_policy.json
+  - policies/baseline_policy.json
+
+requiredArtifacts:
+  - workshop/founding/server_charter_v1.json
+  - workshop/founding/authority_chain.yaml
+  - workshop/founding/mutation_classes.yaml
+  - workshop/founding/model_promotion_law.yaml
+  - workshop/services/workshop_cluster_topology.yaml
+  - workshop/benchmarks/constitutional_benchmark_manifest.yaml
+
+admissionGates:
+  - scripts/preprod_inspection.ps1
+  - scripts/advanced_integration_preflight.ps1
+
+promotionRules:
+  requireShadowEvaluationPass: true
+  requireQuorumApprovals: true
+  requireSignedPromotionBundle: true
+  requireContinuityChain: true
+
+rollbackRules:
+  destructiveRollback: forbidden
+  compensationOnly: true
+  repairMode: certified-unit-only

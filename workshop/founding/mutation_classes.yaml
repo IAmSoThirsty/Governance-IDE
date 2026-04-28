@@ -1,0 +1,10 @@
+version: 1
+classes:
+  - name: read
+    description: Non-mutating observation and reporting.
+  - name: softMutation
+    description: Lower-risk mutable operations with bounded blast radius.
+  - name: hardMutation
+    description: High-impact mutable operations requiring policy authorization.
+  - name: governanceMutation
+    description: Constitutional-impact operations requiring quorum evidence.

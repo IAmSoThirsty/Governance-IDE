@@ -1,0 +1,35 @@
+version: 1
+name: sovereign-model-server-workshop-cluster
+services:
+  - name: charterd
+    responsibility: constitutional schema load and policy evaluation API
+  - name: ledgerd
+    responsibility: append-only governance and continuity ledger
+  - name: corpusd
+    responsibility: doctrine graph and retrieval services
+  - name: traind
+    responsibility: governed training orchestration
+  - name: shadowd
+    responsibility: deterministic shadow evaluation plane
+  - name: tokend
+    responsibility: capability token validation and revocation checks
+  - name: repaird
+    responsibility: certified repair store and apply workflow
+  - name: attestd
+    responsibility: hardware and binary attestation workflows
+  - name: runtimed
+    responsibility: inference gateway with action governance
+  - name: watchd
+    responsibility: drift and invariant violation monitoring
+trustDomains:
+  - training
+  - evaluation
+  - signing
+  - serving
+networkPolicy:
+  defaultEgress: deny
+  classes:
+    - none
+    - mirror-only
+    - signed-registry-only
+    - supervised-general

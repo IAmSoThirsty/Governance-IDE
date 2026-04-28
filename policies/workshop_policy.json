@@ -1,0 +1,110 @@
+{
+  "version": "1.0.0",
+  "resolution": {
+    "default": "deny",
+    "precedence": [
+      "invariants",
+      "immutableDecisionRecord",
+      "policyEvaluation",
+      "capabilityToken",
+      "runtimeConfiguration",
+      "operatorOverride"
+    ]
+  },
+  "workspace": {
+    "allowed_roots": [
+      "t:/Sovereign IDE"
+    ]
+  },
+  "risk_scores": {
+    "read": 10,
+    "softMutation": 30,
+    "hardMutation": 70,
+    "governanceMutation": 92
+  },
+  "actions": {
+    "bootstrap_workshop": {
+      "required_mutation_class": "governanceMutation",
+      "allowed_roles": [
+        "trust_administrator",
+        "release_authority"
+      ],
+      "quorum_required": true,
+      "risk_score": 95
+    },
+    "admit_artifact": {
+      "required_mutation_class": "hardMutation",
+      "allowed_roles": [
+        "data_steward",
+        "trust_administrator"
+      ],
+      "quorum_required": false,
+      "risk_score": 60
+    },
+    "build_dataset": {
+      "required_mutation_class": "hardMutation",
+      "allowed_roles": [
+        "data_steward",
+        "model_steward"
+      ],
+      "quorum_required": false,
+      "risk_score": 70
+    },
+    "start_training_run": {
+      "required_mutation_class": "governanceMutation",
+      "allowed_roles": [
+        "model_steward",
+        "release_authority"
+      ],
+      "quorum_required": true,
+      "risk_score": 90
+    },
+    "run_shadow_evaluation": {
+      "required_mutation_class": "hardMutation",
+      "allowed_roles": [
+        "reviewer",
+        "security_reviewer"
+      ],
+      "quorum_required": false,
+      "risk_score": 65
+    },
+    "promote_checkpoint": {
+      "required_mutation_class": "governanceMutation",
+      "allowed_roles": [
+        "release_authority",
+        "reviewer",
+        "security_reviewer"
+      ],
+      "quorum_required": true,
+      "risk_score": 95
+    },
+    "register_repair_unit": {
+      "required_mutation_class": "governanceMutation",
+      "allowed_roles": [
+        "trust_administrator",
+        "release_authority"
+      ],
+      "quorum_required": true,
+      "risk_score": 94
+    },
+    "apply_repair_unit": {
+      "required_mutation_class": "governanceMutation",
+      "allowed_roles": [
+        "incident_responder",
+        "release_authority"
+      ],
+      "quorum_required": true,
+      "risk_score": 93
+    },
+    "export_workshop_report": {
+      "required_mutation_class": "read",
+      "allowed_roles": [
+        "auditor",
+        "reviewer",
+        "release_authority"
+      ],
+      "quorum_required": false,
+      "risk_score": 15
+    }
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "genesis_event_id": "genesis_13beace4b849470dbb24cc9278b56b86",
+  "charter_hash": "cb6257e21c980f05809e75c6d3948565798cc7f7e1a01f15aadd818600905ed5",
+  "policy_hash": "262ba94ae753190f77c309c349e390131fc4ef76e6c9d394aba8932e39c0410f",
+  "host": "Thirstys-Computer",
+  "platform": "Windows-10-10.0.26200-SP0",
+  "seed_checkpoint_id": "genesis_model_seed",
+  "created_at": "2026-04-28T17:14:57.141084+00:00"
+}

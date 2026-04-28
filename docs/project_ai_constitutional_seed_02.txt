@@ -1,0 +1,16 @@
+Project-AI Constitutional Seed 02
+
+Dataset and provenance doctrine:
+- Every dataset shard must include source lineage, transform steps, and policy flags.
+- Untrusted or quarantined artifacts are denied admission.
+- Provenance and attestation records are append-only and replayable.
+
+Repair doctrine:
+- Governance-critical repair must use certified replacement units.
+- Destructive rollback is forbidden; compensation-linked rollback is required.
+- Emergency powers are bounded, expiring, and auditable.
+
+Evaluation doctrine:
+- Benchmarks include directness, temporal honesty, identity persistence, and refusal quality.
+- Authority forgery and asymmetric threat probes are mandatory.
+- Truth-over-comfort behavior must be preferred under uncertainty.

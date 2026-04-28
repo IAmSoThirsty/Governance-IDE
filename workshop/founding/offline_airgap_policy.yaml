@@ -1,0 +1,8 @@
+version: 1
+policy: offline-airgap
+rules:
+  - import via signed bundles only
+  - attested scanner required for ingest
+  - unmanaged artifact ingestion denied
+  - transfer manifest schema required
+failBehavior: deny

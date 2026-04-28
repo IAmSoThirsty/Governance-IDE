@@ -1,0 +1,17 @@
+{
+  "charter_version": "1.0.0",
+  "name": "Project-AI Sovereign Model Server Charter",
+  "laws": [
+    "no_silent_state_mutation",
+    "no_self_authorization",
+    "no_fabricated_continuity",
+    "no_improvised_governance_repair",
+    "no_promotion_without_evidence_and_signatures"
+  ],
+  "authority_chain": {
+    "root_authority": "Sovereign Covenant",
+    "subordinate_charter": "Server Charter v1.0",
+    "enforcement": "runtime_governance"
+  },
+  "created_at": "2026-04-28T17:14:57.082532+00:00"
+}

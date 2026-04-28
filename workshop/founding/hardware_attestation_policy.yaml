@@ -1,0 +1,8 @@
+version: 1
+policy: hardware-attestation
+requirements:
+  - measured boot for sensitive nodes
+  - attested signer for promotions
+  - immutable artifact digest capture
+  - attestation freshness validation
+failBehavior: deny-promotion

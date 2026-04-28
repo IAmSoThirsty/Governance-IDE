@@ -1,0 +1,27 @@
+version: 1
+plan: sovereign-model-server-workshop-12-sprint
+sprints:
+  - sprint: 1
+    outcome: server charter, authority chain, genesis schema
+  - sprint: 2
+    outcome: ledger and provenance event model
+  - sprint: 3
+    outcome: corpus normalization pipeline
+  - sprint: 4
+    outcome: doctrine graph and retrieval API
+  - sprint: 5
+    outcome: dataset foundry with signed manifests
+  - sprint: 6
+    outcome: training orchestrator with approval gates
+  - sprint: 7
+    outcome: deterministic shadow evaluation harness
+  - sprint: 8
+    outcome: continuity, identity, and directness benchmarks
+  - sprint: 9
+    outcome: inference gateway with action governance
+  - sprint: 10
+    outcome: containment-first infra controls
+  - sprint: 11
+    outcome: promotion chamber and signed artifact registry
+  - sprint: 12
+    outcome: certified repair store and compensation rollback

@@ -7,6 +7,7 @@ from .governance import (
     HMACDecisionSigner,
     PolicyEngine,
 )
+from .workshop import SovereignModelServerWorkshop
 
 __all__ = [
     "Settings",
@@ -15,4 +16,5 @@ __all__ = [
     "HashChainJournal",
     "HMACDecisionSigner",
     "PolicyEngine",
+    "SovereignModelServerWorkshop",
 ]

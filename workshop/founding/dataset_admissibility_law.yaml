@@ -1,0 +1,9 @@
+version: 1
+law: dataset-admissibility
+requirements:
+  - artifact provenance hash required
+  - source class required
+  - trust class required
+  - quarantine/untrusted artifacts denied
+  - manifest signatures required for emitted dataset products
+failBehavior: deny

@@ -1,0 +1,13 @@
+{
+  "genesisEventId": "genesis_TEMPLATE",
+  "charterVersion": "1.0.0",
+  "policyVersion": "1.0.0",
+  "seedCheckpointId": "genesis_model_seed",
+  "datasetManifestHashes": [],
+  "operatorKeys": [],
+  "hardwareAttestation": {
+    "host": "TEMPLATE",
+    "platform": "TEMPLATE"
+  },
+  "createdAt": "2026-04-28T00:00:00Z"
+}

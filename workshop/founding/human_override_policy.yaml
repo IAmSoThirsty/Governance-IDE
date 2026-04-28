@@ -1,0 +1,8 @@
+version: 1
+policy: human-override
+rules:
+  - overrides are explicit mutations
+  - override must include reason and expiry
+  - override events are append-only auditable
+  - override cannot bypass immutable invariants
+failBehavior: deny

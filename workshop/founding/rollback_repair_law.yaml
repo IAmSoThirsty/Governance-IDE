@@ -1,0 +1,11 @@
+version: 1
+law: rollback-and-repair
+principles:
+  destructiveRollback: forbidden
+  rollbackMode: compensation-transactions-only
+  repairMode: certified-unit-only
+  emergencyMutationWithoutLedger: forbidden
+requiredEvidence:
+  - target decision id
+  - compensation reason
+  - certification decision id for repair unit

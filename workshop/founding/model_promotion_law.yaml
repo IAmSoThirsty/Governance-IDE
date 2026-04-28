@@ -1,0 +1,9 @@
+version: 1
+law: model-promotion
+requirements:
+  - shadow evaluation pass required
+  - continuity chain must be unbroken
+  - quorum approvals required
+  - signed promotion bundle required
+  - policy and charter compatibility required
+failBehavior: deny
