@@ -459,7 +459,10 @@ class ConstitutionalDatasetFoundry:
                 "manifest": to_primitive(manifest),
                 "records": records,
             }
-            _save_json(self.datasets_dir / f"{dataset_id}.json", dataset_payload)
+            _save_json(
+                self.datasets_dir / f"{dataset_id}.json",
+                dataset_payload,
+            )
             index_state["datasets"].append(
                 {
                     "dataset_id": dataset_id,
@@ -1100,33 +1103,48 @@ class SovereignModelServerWorkshop:
         self.settings: Settings = get_settings(workspace_root)
         self.workspace_root = self.settings.workspace_root
 
-        self.paths = self._build_paths(self.workspace_root, self.settings.state_dir)
+        self.paths = self._build_paths(
+            self.workspace_root,
+            self.settings.state_dir,
+        )
         self._ensure_layout()
 
         self.policy_path = (
             policy_path.resolve()
             if policy_path
-            else (self.workspace_root / "policies/workshop_policy.json").resolve()
+            else (
+                self.workspace_root / "policies/workshop_policy.json"
+            ).resolve()
         )
         self._ensure_policy_file()
 
         self.signer = HMACDecisionSigner(self.settings.signing_key)
-        self.journal = HashChainJournal(self.paths.state_dir / "workshop_journal.jsonl")
+        self.journal = HashChainJournal(
+            self.paths.state_dir / "workshop_journal.jsonl",
+        )
         self.runtime = GovernanceRuntime(
             policy_engine=PolicyEngine.from_path(self.policy_path),
             journal=self.journal,
             signer=self.signer,
         )
-        self.provenance = ProvenanceGraph(self.paths.state_dir / "workshop_provenance.json")
+        self.provenance = ProvenanceGraph(
+            self.paths.state_dir / "workshop_provenance.json",
+        )
 
-        self.ingress = ConstitutionalIngressGateway(self.paths.ingress_registry)
-        self.normalizer = CorpusNormalizationDictionaryBuilder(self.paths.corpus_state)
+        self.ingress = ConstitutionalIngressGateway(
+            self.paths.ingress_registry,
+        )
+        self.normalizer = CorpusNormalizationDictionaryBuilder(
+            self.paths.corpus_state,
+        )
         self.foundry = ConstitutionalDatasetFoundry(
             self.paths.dataset_index,
             self.paths.datasets_dir,
             self.signer,
         )
-        self.training_core = TrainingOrchestrationCore(self.paths.training_runs)
+        self.training_core = TrainingOrchestrationCore(
+            self.paths.training_runs,
+        )
         self.shadow_eval = ShadowEvaluationPlane(self.paths.evaluations)
         self.containment = RuntimeContainmentPlane()
         self.state_register = StateRegisterLedgerPlane(
@@ -1158,7 +1176,12 @@ class SovereignModelServerWorkshop:
             promotions=state_dir / "workshop" / "promotions.json",
             repair_store=state_dir / "workshop" / "repair_store.json",
             continuity_index=state_dir / "workshop" / "continuity_index.json",
-            report_path=workspace_root / "integration" / "out" / "workshop_report.json",
+            report_path=(
+                workspace_root
+                / "integration"
+                / "out"
+                / "workshop_report.json"
+            ),
         )
 
     def _ensure_layout(self) -> None:
@@ -1264,6 +1287,37 @@ class SovereignModelServerWorkshop:
         quorum_proof: str,
     ) -> dict[str, Any]:
         def _mutate() -> dict[str, Any]:
+            charter_path = self.paths.founding_dir / "server_charter_v1.json"
+            genesis_path = self.paths.genesis_dir / "genesis_event.json"
+
+            if charter_path.exists() and genesis_path.exists():
+                charter = _load_json(charter_path, {})
+                genesis_record = _load_json(genesis_path, {})
+
+                genesis_checkpoint_id = str(
+                    genesis_record.get(
+                        "seed_checkpoint_id",
+                        "genesis_model_seed",
+                    ),
+                )
+                self.state_register.register_genesis_checkpoint(
+                    checkpoint_id=genesis_checkpoint_id,
+                    trace_id=context.trace_id,
+                    metadata={
+                        "kind": "genesis",
+                        "charter_version": str(
+                            charter.get("charter_version", "1.0.0"),
+                        ),
+                    },
+                )
+
+                return {
+                    "charter_path": str(charter_path.resolve()),
+                    "genesis_path": str(genesis_path.resolve()),
+                    "genesis_event": genesis_record,
+                    "reused_existing_genesis": True,
+                }
+
             charter = {
                 "charter_version": "1.0.0",
                 "name": "Project-AI Sovereign Model Server Charter",
@@ -1281,7 +1335,6 @@ class SovereignModelServerWorkshop:
                 },
                 "created_at": utc_now(),
             }
-            charter_path = self.paths.founding_dir / "server_charter_v1.json"
             _save_json(charter_path, charter)
 
             genesis_checkpoint_id = "genesis_model_seed"
@@ -1303,7 +1356,6 @@ class SovereignModelServerWorkshop:
                 "seed_checkpoint_id": genesis_checkpoint_id,
                 "created_at": utc_now(),
             }
-            genesis_path = self.paths.genesis_dir / "genesis_event.json"
             _save_json(genesis_path, genesis_record)
 
             self.journal.append(
@@ -1420,7 +1472,10 @@ class SovereignModelServerWorkshop:
         quorum_proof: str,
     ) -> dict[str, Any]:
         def _mutate() -> dict[str, Any]:
-            dataset_state = _load_json(self.paths.dataset_index, {"datasets": []})
+            dataset_state = _load_json(
+                self.paths.dataset_index,
+                {"datasets": []},
+            )
             dataset_paths = {
                 item["dataset_id"]: Path(item["path"])
                 for item in dataset_state.get("datasets", [])
@@ -1438,12 +1493,16 @@ class SovereignModelServerWorkshop:
                 payload = _load_json(dataset_paths[dataset_id], {})
                 manifest = payload.get("manifest")
                 if not manifest:
-                    raise ValueError(f"manifest missing for dataset: {dataset_id}")
+                    raise ValueError(
+                        f"manifest missing for dataset: {dataset_id}",
+                    )
                 manifests.append(
                     DatasetConstitutionManifest(
                         dataset_id=manifest["dataset_id"],
                         product_name=manifest["product_name"],
-                        source_artifact_ids=tuple(manifest["source_artifact_ids"]),
+                        source_artifact_ids=tuple(
+                            manifest["source_artifact_ids"],
+                        ),
                         source_chunk_ids=tuple(manifest["source_chunk_ids"]),
                         transform_steps=tuple(manifest["transform_steps"]),
                         policy_flags=tuple(manifest["policy_flags"]),
@@ -1560,7 +1619,10 @@ class SovereignModelServerWorkshop:
         quorum_proof: str,
     ) -> dict[str, Any]:
         def _mutate() -> dict[str, Any]:
-            eval_state = _load_json(self.paths.evaluations, {"evaluations": []})
+            eval_state = _load_json(
+                self.paths.evaluations,
+                {"evaluations": []},
+            )
             verdict_raw = next(
                 (
                     item
@@ -1673,10 +1735,15 @@ class SovereignModelServerWorkshop:
             workspace_root=self.workspace_root,
         )
 
-    def export_workshop_report(self, output_path: Path | None = None) -> dict[str, Any]:
+    def export_workshop_report(
+        self,
+        output_path: Path | None = None,
+    ) -> dict[str, Any]:
         report = {
             "generated_at": utc_now(),
-            "charter_exists": (self.paths.founding_dir / "server_charter_v1.json").exists(),
+            "charter_exists": (
+                self.paths.founding_dir / "server_charter_v1.json"
+            ).exists(),
             "policy_path": str(self.policy_path),
             "ingress_artifacts": len(
                 _load_json(self.paths.ingress_registry, {"artifacts": []})[
@@ -1714,6 +1781,10 @@ class SovereignModelServerWorkshop:
             ),
         }
 
-        destination = output_path.resolve() if output_path else self.paths.report_path
+        destination = (
+            output_path.resolve()
+            if output_path
+            else self.paths.report_path
+        )
         _save_json(destination, report)
         return report

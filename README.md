@@ -39,6 +39,7 @@ This repository implements a local-first, offline-capable governance core with:
   - `python -m unittest discover -s tests -p "test_*.py"`
 - Run local quality and readiness gates:
   - `./scripts/local_quality_gate.ps1`
+  - `./scripts/run_e2e_test_matrix.ps1`
   - `./scripts/preprod_inspection.ps1`
   - `./scripts/advanced_integration_preflight.ps1`
 

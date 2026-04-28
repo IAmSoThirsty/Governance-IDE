@@ -55,7 +55,6 @@ $artifactPaths = ($docPaths -join ",")
 $common = @(
     "--workspace-root", $repoRoot,
     "--policy-path", $PolicyPath,
-    "--trace-id", "",
     "--actor", "workshop-operator",
     "--roles", "trust_administrator,release_authority,model_steward,data_steward,reviewer,security_reviewer",
     "--tenant", "tenant1",
@@ -103,7 +102,6 @@ for ($attempt = 1; $attempt -le $MaxTrainingAttempts; $attempt++) {
     ) + $common + @(
         "--quorum-proof", "train-quorum",
         "--model-family", "project-ai-constitutional-$attempt",
-        "--base-checkpoint", "",
         "--dataset-ids", $datasetCsv
     )
     $train = Invoke-CheckedJson -FilePath $PythonExe -Arguments $trainArgs

@@ -15,16 +15,19 @@ This runbook operationalizes integration of the Sovereign IDE governed runtime i
 
 1. **Local bootstrap**
    - Run `bootstrap.local.ps1` as needed for local environment tooling.
-2. **Pre-production gate**
+2. **All-category E2E matrix gate**
+   - Run `scripts/run_e2e_test_matrix.ps1`.
+   - Must complete with `Status: pass`.
+3. **Pre-production gate**
    - Run `scripts/preprod_inspection.ps1`.
    - Must complete with exit code `0`.
-3. **Advanced integration preflight**
+4. **Advanced integration preflight**
    - Run `scripts/advanced_integration_preflight.ps1`.
    - Must return `status: pass` in generated report.
-4. **System orchestrator binding**
+5. **System orchestrator binding**
    - Bind CLI operations from `system_integration_contract.yaml`.
    - Preserve action/role/quorum semantics from policy pack.
-5. **Observability and audit binding**
+6. **Observability and audit binding**
    - Map governance and federation event surface.
    - Ensure append-only storage and replay capability.
 
