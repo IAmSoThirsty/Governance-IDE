@@ -110,6 +110,10 @@ This repository implements a local-first, offline-capable governance core with:
   - `deployments/production.env.example`
 - Release manifest template:
   - `deployments/release.manifest.example.json`
+- Local container rehearsal:
+  - `deployments/docker-compose.rehearsal.yaml`
+- Kubernetes runtime skeleton:
+  - `deployments/kubernetes.runtime.yaml`
 
 ## Project-AI Sovereign Model Server Workshop
 

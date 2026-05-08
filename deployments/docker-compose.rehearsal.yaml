@@ -1,0 +1,31 @@
+services:
+  sovereign-ide-runtime:
+    image: ${SOVEREIGN_IMAGE_REF:-sovereign-ide-runtime:local}
+    container_name: sovereign-ide-runtime-rehearsal
+    ports:
+      - "8765:8765"
+    environment:
+      SOVEREIGN_SIGNING_KEY: ${SOVEREIGN_SIGNING_KEY:?set signing key}
+      SOVEREIGN_SERVICE_TOKEN: ${SOVEREIGN_SERVICE_TOKEN:?set service token}
+      SOVEREIGN_POLICY_PATH: policies/baseline_policy.json
+      SOVEREIGN_STATE_DIR: /app/state
+      SOVEREIGN_TRAINING_BACKEND: ${SOVEREIGN_TRAINING_BACKEND:-local-command}
+      SOVEREIGN_TRAINING_COMMAND: ${SOVEREIGN_TRAINING_COMMAND:?set trainer command}
+      SOVEREIGN_TRAINING_ARTIFACT_STORE: ${SOVEREIGN_TRAINING_ARTIFACT_STORE:?set artifact store}
+    volumes:
+      - sovereign-ide-state:/app/state
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import json, os, urllib.request; req=urllib.request.Request('http://127.0.0.1:8765/ready', headers={'Authorization':'Bearer '+os.environ['SOVEREIGN_SERVICE_TOKEN']}); data=json.load(urllib.request.urlopen(req, timeout=3)); raise SystemExit(0 if data.get('status') == 'ready' else 1)"
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  sovereign-ide-state:

@@ -44,6 +44,11 @@ deployment readiness.
 8. Verify `/health`, authenticated `/ready`, policy evaluation, and audit
    replay in the target environment.
 
+Reference deployment artifacts:
+
+- Local container rehearsal: `deployments/docker-compose.rehearsal.yaml`
+- Kubernetes runtime skeleton: `deployments/kubernetes.runtime.yaml`
+
 ## Fine-Tuning Requirement
 
 Simulation is allowed only for local governance smoke tests. A production
