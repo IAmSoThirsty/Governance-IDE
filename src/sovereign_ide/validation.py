@@ -4,6 +4,8 @@ from pathlib import Path
 import json
 from typing import Any
 
+from .app_catalog import validate_app_catalog
+
 
 WORKSPACE_ROOT_PLACEHOLDER = "${SOVEREIGN_WORKSPACE_ROOT}"
 MUTATION_CLASSES = {
@@ -173,6 +175,12 @@ def validate_repository_artifacts(workspace_root: str | Path) -> None:
     if readiness_contract.exists():
         validate_readiness_contract(
             json.loads(readiness_contract.read_text(encoding="utf-8")),
+        )
+
+    app_catalog = root / "deployments" / "app_catalog.json"
+    if app_catalog.exists():
+        validate_app_catalog(
+            json.loads(app_catalog.read_text(encoding="utf-8")),
         )
 
 

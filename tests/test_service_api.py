@@ -54,11 +54,53 @@ def _write_policy(root: Path) -> None:
     )
 
 
+def _write_app_catalog(root: Path) -> None:
+    deployments_dir = root / "deployments"
+    deployments_dir.mkdir(parents=True, exist_ok=True)
+    (deployments_dir / "app_catalog.json").write_text(
+        json.dumps(
+            {
+                "version": "1.0.0",
+                "apps": [
+                    {
+                        "id": "runtime-service-api",
+                        "display_name": "Runtime Service API",
+                        "category": "core",
+                        "status": "enabled",
+                        "description": "HTTP runtime surface.",
+                        "surfaces": [
+                            {"type": "api", "ref": "/v1/apps"},
+                        ],
+                        "requirements": [],
+                        "governance_actions": [],
+                        "tags": ["api"],
+                    },
+                    {
+                        "id": "workshop-model-training",
+                        "display_name": "Workshop Model Fine-Tuning",
+                        "category": "modeling",
+                        "status": "requires_configuration",
+                        "description": "Actual fine-tuning surface.",
+                        "surfaces": [
+                            {"type": "cli", "ref": "workshop-train"},
+                        ],
+                        "requirements": ["SOVEREIGN_TRAINING_COMMAND"],
+                        "governance_actions": ["start_training_run"],
+                        "tags": ["training"],
+                    },
+                ],
+            },
+        ),
+        encoding="utf-8",
+    )
+
+
 class ServiceApiTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()
         self.root = Path(self.temp_dir.name).resolve()
         _write_policy(self.root)
+        _write_app_catalog(self.root)
         (self.root / ".env").write_text(
             "\n".join(
                 [
@@ -141,6 +183,18 @@ class ServiceApiTests(unittest.TestCase):
         self.assertEqual(replay["trace_id"], trace_id)
         self.assertEqual(len(replay["entries"]), 3)
 
+    def test_apps_catalog_endpoint_lists_and_filters_apps(self) -> None:
+        catalog = self._get_json("/v1/apps")
+        self.assertEqual(catalog["app_count"], 2)
+        self.assertEqual(
+            [app["id"] for app in catalog["apps"]],
+            ["runtime-service-api", "workshop-model-training"],
+        )
+
+        filtered = self._get_json("/v1/apps?status=requires_configuration")
+        self.assertEqual(filtered["app_count"], 1)
+        self.assertEqual(filtered["apps"][0]["id"], "workshop-model-training")
+
     def test_service_token_protects_ready_and_api(self) -> None:
         with patch.dict(os.environ, {"SOVEREIGN_SERVICE_TOKEN": "secret"}):
             health = self._get_json("/health")
@@ -148,6 +202,9 @@ class ServiceApiTests(unittest.TestCase):
 
             with self.assertRaises(Exception):
                 self._get_json("/ready")
+
+            with self.assertRaises(Exception):
+                self._get_json("/v1/apps")
 
             req = request.Request(
                 self.base_url + "/ready",

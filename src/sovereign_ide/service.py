@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
+from .app_catalog import filter_app_catalog, load_app_catalog
 from .config import get_settings
 from .governance import (
     GovernanceRuntime,
@@ -117,6 +118,17 @@ def make_handler(workspace_root: str | Path) -> type[BaseHTTPRequestHandler]:
                         workspace_root=settings.workspace_root,
                     )
                     self._send_json(policy)
+                    return
+                if parsed.path == "/v1/apps":
+                    query = parse_qs(parsed.query)
+                    catalog = load_app_catalog(root)
+                    self._send_json(
+                        filter_app_catalog(
+                            catalog,
+                            category=query.get("category", [None])[0],
+                            status=query.get("status", [None])[0],
+                        ),
+                    )
                     return
                 if parsed.path == "/v1/audit/replay":
                     query = parse_qs(parsed.query)

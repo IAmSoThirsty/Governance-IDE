@@ -1,0 +1,230 @@
+{
+  "version": "1.0.0",
+  "generated_by": "sovereign-ide",
+  "apps": [
+    {
+      "id": "governance-runtime",
+      "display_name": "Governance Runtime",
+      "category": "core",
+      "status": "enabled",
+      "description": "Policy evaluation, mutation binding, decision signing, compensation, and audit replay.",
+      "surfaces": [
+        {
+          "type": "cli",
+          "ref": "simulate-mutation"
+        },
+        {
+          "type": "api",
+          "ref": "/v1/policy/evaluate"
+        }
+      ],
+      "requirements": [
+        "SOVEREIGN_SIGNING_KEY",
+        "policy pack"
+      ],
+      "governance_actions": [
+        "apply_patch",
+        "promote_artifact",
+        "compensate:apply_patch"
+      ],
+      "tags": [
+        "policy",
+        "audit",
+        "mutation"
+      ]
+    },
+    {
+      "id": "runtime-service-api",
+      "display_name": "Runtime Service API",
+      "category": "core",
+      "status": "enabled",
+      "description": "HTTP surface for health, readiness, app catalog, policy inspection, audit replay, and policy evaluation.",
+      "surfaces": [
+        {
+          "type": "cli",
+          "ref": "serve"
+        },
+        {
+          "type": "api",
+          "ref": "/health,/ready,/v1/apps,/v1/policy,/v1/audit/replay,/v1/policy/evaluate"
+        }
+      ],
+      "requirements": [
+        "SOVEREIGN_SERVICE_TOKEN for protected deployments"
+      ],
+      "governance_actions": [],
+      "tags": [
+        "service",
+        "api",
+        "readiness"
+      ]
+    },
+    {
+      "id": "supply-chain-registry",
+      "display_name": "Supply-Chain Registry",
+      "category": "governance",
+      "status": "enabled",
+      "description": "Evidence-bound artifact registration, verification memory, and promotion eligibility controls.",
+      "surfaces": [
+        {
+          "type": "python",
+          "ref": "sovereign_ide.supply_chain"
+        }
+      ],
+      "requirements": [
+        "verification evidence records"
+      ],
+      "governance_actions": [
+        "promote_artifact"
+      ],
+      "tags": [
+        "provenance",
+        "promotion",
+        "evidence"
+      ]
+    },
+    {
+      "id": "federation-ledger",
+      "display_name": "Federation Ledger",
+      "category": "governance",
+      "status": "enabled",
+      "description": "Append-only federation journal with hydrate-time sequence and hash-chain integrity verification.",
+      "surfaces": [
+        {
+          "type": "python",
+          "ref": "sovereign_ide.federation"
+        }
+      ],
+      "requirements": [
+        "federation policy",
+        "ledger storage"
+      ],
+      "governance_actions": [],
+      "tags": [
+        "federation",
+        "ledger",
+        "integrity"
+      ]
+    },
+    {
+      "id": "workshop-model-training",
+      "display_name": "Workshop Model Fine-Tuning",
+      "category": "modeling",
+      "status": "requires_configuration",
+      "description": "Governed actual fine-tuning workflow using workshop datasets, trainer command execution, checkpoint manifests, shadow evaluation, and promotion.",
+      "surfaces": [
+        {
+          "type": "cli",
+          "ref": "workshop-train"
+        },
+        {
+          "type": "script",
+          "ref": "scripts/trainers/trl_sft_trainer.py"
+        }
+      ],
+      "requirements": [
+        "SOVEREIGN_TRAINING_COMMAND",
+        "SOVEREIGN_TRAINING_ARTIFACT_STORE",
+        "trainer dependencies",
+        "base model",
+        "governed datasets"
+      ],
+      "governance_actions": [
+        "start_training_run",
+        "promote_checkpoint"
+      ],
+      "tags": [
+        "training",
+        "fine-tuning",
+        "trl",
+        "checkpoint"
+      ]
+    },
+    {
+      "id": "container-runtime",
+      "display_name": "Container Runtime",
+      "category": "deployment",
+      "status": "available",
+      "description": "Non-root Docker runtime image with readiness checks, OCI metadata, and persistent /app/state volume.",
+      "surfaces": [
+        {
+          "type": "dockerfile",
+          "ref": "deployments/Dockerfile"
+        },
+        {
+          "type": "script",
+          "ref": "scripts/container_smoke_test.ps1"
+        }
+      ],
+      "requirements": [
+        "Docker",
+        "SOVEREIGN_IMAGE_REF",
+        "persistent state backend"
+      ],
+      "governance_actions": [],
+      "tags": [
+        "docker",
+        "deployment",
+        "runtime"
+      ]
+    },
+    {
+      "id": "github-integration",
+      "display_name": "GitHub Integration",
+      "category": "external",
+      "status": "requires_configuration",
+      "description": "Repository, pull request, issue, and CI workflow integration for source collaboration and release traceability.",
+      "surfaces": [
+        {
+          "type": "connector",
+          "ref": "github"
+        }
+      ],
+      "requirements": [
+        "GitHub connector or gh authentication",
+        "repository remote"
+      ],
+      "governance_actions": [
+        "release_publish"
+      ],
+      "tags": [
+        "source-control",
+        "ci",
+        "pull-request"
+      ]
+    },
+    {
+      "id": "huggingface-training-jobs",
+      "display_name": "Hugging Face Training Jobs",
+      "category": "external",
+      "status": "requires_configuration",
+      "description": "Cloud GPU fine-tuning path for TRL/PEFT jobs with Hub persistence and optional experiment tracking.",
+      "surfaces": [
+        {
+          "type": "connector",
+          "ref": "hugging-face"
+        },
+        {
+          "type": "env",
+          "ref": "HF_TOKEN"
+        }
+      ],
+      "requirements": [
+        "HF_TOKEN with write permission",
+        "Hub model repository",
+        "dataset location",
+        "paid Jobs-capable Hugging Face account"
+      ],
+      "governance_actions": [
+        "start_training_run",
+        "promote_checkpoint"
+      ],
+      "tags": [
+        "training",
+        "gpu",
+        "hub",
+        "external"
+      ]
+    }
+  ]
+}

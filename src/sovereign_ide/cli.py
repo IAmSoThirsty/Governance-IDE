@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from .app_catalog import filter_app_catalog, load_app_catalog
 from .config import get_settings
 from .evaluation import EvaluationHarness
 from .governance import (
@@ -290,6 +291,18 @@ def cmd_serve(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_apps_list(args: argparse.Namespace) -> int:
+    catalog = load_app_catalog(Path(args.workspace_root).resolve())
+    _print_json(
+        filter_app_catalog(
+            catalog,
+            category=args.category or None,
+            status=args.status or None,
+        ),
+    )
+    return 0
+
+
 def cmd_workshop_init(args: argparse.Namespace) -> int:
     workshop = _build_workshop(args)
     context = _workshop_context(args)
@@ -495,6 +508,12 @@ def build_parser() -> argparse.ArgumentParser:
     serve_parser.add_argument("--host", default="127.0.0.1")
     serve_parser.add_argument("--port", type=int, default=8765)
     serve_parser.set_defaults(func=cmd_serve)
+
+    apps_list = subparsers.add_parser("apps-list")
+    apps_list.add_argument("--workspace-root", default=str(Path.cwd()))
+    apps_list.add_argument("--category", default="")
+    apps_list.add_argument("--status", default="")
+    apps_list.set_defaults(func=cmd_apps_list)
 
     workshop_init = subparsers.add_parser("workshop-init")
     _add_workshop_common_args(workshop_init, include_quorum=True)

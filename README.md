@@ -75,9 +75,20 @@ This repository implements a local-first, offline-capable governance core with:
 - Current endpoints:
   - `GET /health`
   - `GET /ready`
+  - `GET /v1/apps`
   - `GET /v1/policy`
   - `GET /v1/audit/replay?trace_id=...`
   - `POST /v1/policy/evaluate`
+
+## IDE app catalog
+
+- List available runtime apps, integrations, deployment surfaces, and missing
+  configuration:
+  - `python -m sovereign_ide.cli apps-list`
+- Filter by status or category:
+  - `python -m sovereign_ide.cli apps-list --status requires_configuration`
+- Catalog source:
+  - `deployments/app_catalog.json`
 
 ## Container deployment
 
