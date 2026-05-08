@@ -5,9 +5,11 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
+import os
 from pathlib import Path
 import platform
 import re
+import subprocess
 from statistics import mean
 from typing import Any, Callable
 
@@ -146,6 +148,20 @@ class TrainingCheckpointRecord:
     dataset_ids: tuple[str, ...]
     checkpoint_hash: str
     created_at: str
+    execution_mode: str
+    artifact_uri: str
+
+
+@dataclass(frozen=True)
+class TrainingJobRequest:
+    request_id: str
+    run_id: str
+    model_family: str
+    base_checkpoint: str | None
+    dataset_ids: tuple[str, ...]
+    dataset_paths: tuple[str, ...]
+    output_dir: str
+    requested_at: str
 
 
 @dataclass(frozen=True)
@@ -505,10 +521,36 @@ class ConstitutionalDatasetFoundry:
 
 
 class TrainingOrchestrationCore:
-    def __init__(self, training_runs_path: Path) -> None:
+    def __init__(self, training_runs_path: Path, workspace_root: Path) -> None:
         self.training_runs_path = training_runs_path
+        self.workspace_root = workspace_root
 
     def start_run(
+        self,
+        model_family: str,
+        base_checkpoint: str | None,
+        dataset_manifests: list[DatasetConstitutionManifest],
+        dataset_paths: list[Path],
+        execution_mode: str,
+        training_command: str | None = None,
+    ) -> tuple[dict[str, Any], TrainingCheckpointRecord]:
+        if execution_mode == "simulated":
+            return self._start_simulated_run(
+                model_family=model_family,
+                base_checkpoint=base_checkpoint,
+                dataset_manifests=dataset_manifests,
+            )
+        if execution_mode != "actual":
+            raise ValueError(f"unknown training execution mode: {execution_mode}")
+        return self._start_actual_run(
+            model_family=model_family,
+            base_checkpoint=base_checkpoint,
+            dataset_manifests=dataset_manifests,
+            dataset_paths=dataset_paths,
+            training_command=training_command,
+        )
+
+    def _start_simulated_run(
         self,
         model_family: str,
         base_checkpoint: str | None,
@@ -525,7 +567,9 @@ class TrainingOrchestrationCore:
             "model_family": model_family,
             "base_checkpoint": base_checkpoint,
             "dataset_ids": [m.dataset_id for m in dataset_manifests],
-            "status": "completed",
+            "status": "simulated_completed",
+            "execution_mode": "simulated",
+            "artifact_kind": "metadata_derived_checkpoint",
             "started_at": utc_now(),
             "completed_at": utc_now(),
         }
@@ -550,12 +594,141 @@ class TrainingOrchestrationCore:
             dataset_ids=tuple(m.dataset_id for m in dataset_manifests),
             checkpoint_hash=checkpoint_hash,
             created_at=utc_now(),
+            execution_mode="simulated",
+            artifact_uri=f"simulated://{run_id}",
         )
 
         state["runs"].append(run_payload)
         state["checkpoints"].append(to_primitive(checkpoint))
         _save_json(self.training_runs_path, state)
         return run_payload, checkpoint
+
+    def _start_actual_run(
+        self,
+        model_family: str,
+        base_checkpoint: str | None,
+        dataset_manifests: list[DatasetConstitutionManifest],
+        dataset_paths: list[Path],
+        training_command: str | None,
+    ) -> tuple[dict[str, Any], TrainingCheckpointRecord]:
+        command = (
+            training_command
+            or os.getenv("SOVEREIGN_TRAINING_COMMAND", "").strip()
+        )
+        if not command:
+            raise ValueError(
+                "actual training requires --training-command or "
+                "SOVEREIGN_TRAINING_COMMAND",
+            )
+
+        state = _load_json(
+            self.training_runs_path,
+            {"runs": [], "checkpoints": []},
+        )
+        run_id = new_id("run")
+        request_dir = self.training_runs_path.parent / "training_requests"
+        output_dir = self.training_runs_path.parent / "training_outputs" / run_id
+        request_dir.mkdir(parents=True, exist_ok=True)
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        request = TrainingJobRequest(
+            request_id=new_id("trainingRequest"),
+            run_id=run_id,
+            model_family=model_family,
+            base_checkpoint=base_checkpoint,
+            dataset_ids=tuple(m.dataset_id for m in dataset_manifests),
+            dataset_paths=tuple(str(path.resolve()) for path in dataset_paths),
+            output_dir=str(output_dir.resolve()),
+            requested_at=utc_now(),
+        )
+        request_path = request_dir / f"{run_id}.request.json"
+        output_manifest_path = output_dir / "training_result.json"
+        _save_json(request_path, to_primitive(request))
+
+        started_at = utc_now()
+        command_parts = self._split_training_command(command)
+        completed = subprocess.run(
+            command_parts
+            + [
+                "--request",
+                str(request_path.resolve()),
+                "--output",
+                str(output_manifest_path.resolve()),
+            ],
+            cwd=self.workspace_root,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        completed_at = utc_now()
+        if completed.returncode != 0:
+            raise RuntimeError(
+                "training command failed:"
+                f"exit={completed.returncode}:stderr={completed.stderr}",
+            )
+        if not output_manifest_path.exists():
+            raise RuntimeError(
+                "training command completed without writing output manifest",
+            )
+
+        output_manifest = _load_json(output_manifest_path, {})
+        if output_manifest.get("status") != "completed":
+            raise RuntimeError(
+                "training output manifest status must be completed",
+            )
+        artifact_uri = str(output_manifest.get("artifact_uri", "")).strip()
+        checkpoint_hash = str(
+            output_manifest.get("checkpoint_hash", ""),
+        ).strip()
+        if not artifact_uri:
+            raise RuntimeError("training output manifest missing artifact_uri")
+        if not re.fullmatch(r"[a-fA-F0-9]{64}", checkpoint_hash):
+            raise RuntimeError(
+                "training output manifest checkpoint_hash must be sha256 hex",
+            )
+
+        run_payload = {
+            "run_id": run_id,
+            "model_family": model_family,
+            "base_checkpoint": base_checkpoint,
+            "dataset_ids": [m.dataset_id for m in dataset_manifests],
+            "status": "completed",
+            "execution_mode": "actual",
+            "artifact_kind": "trained_checkpoint",
+            "training_command": command,
+            "request_path": str(request_path.resolve()),
+            "output_manifest_path": str(output_manifest_path.resolve()),
+            "started_at": started_at,
+            "completed_at": completed_at,
+        }
+        checkpoint = TrainingCheckpointRecord(
+            checkpoint_id=str(
+                output_manifest.get("checkpoint_id") or new_id("checkpoint"),
+            ),
+            run_id=run_id,
+            model_family=model_family,
+            base_checkpoint=base_checkpoint,
+            dataset_ids=tuple(m.dataset_id for m in dataset_manifests),
+            checkpoint_hash=checkpoint_hash.lower(),
+            created_at=completed_at,
+            execution_mode="actual",
+            artifact_uri=artifact_uri,
+        )
+
+        state["runs"].append(run_payload)
+        state["checkpoints"].append(to_primitive(checkpoint))
+        _save_json(self.training_runs_path, state)
+        return run_payload, checkpoint
+
+    @staticmethod
+    def _split_training_command(command: str) -> list[str]:
+        parts = [
+            match.group(1) or match.group(2)
+            for match in re.finditer(r'"([^"]+)"|(\S+)', command)
+        ]
+        if not parts:
+            raise ValueError("training command is empty")
+        return parts
 
 
 class ShadowEvaluationPlane:
@@ -1123,7 +1296,10 @@ class SovereignModelServerWorkshop:
             self.paths.state_dir / "workshop_journal.jsonl",
         )
         self.runtime = GovernanceRuntime(
-            policy_engine=PolicyEngine.from_path(self.policy_path),
+            policy_engine=PolicyEngine.from_path(
+                self.policy_path,
+                workspace_root=self.workspace_root,
+            ),
             journal=self.journal,
             signer=self.signer,
         )
@@ -1144,6 +1320,7 @@ class SovereignModelServerWorkshop:
         )
         self.training_core = TrainingOrchestrationCore(
             self.paths.training_runs,
+            self.workspace_root,
         )
         self.shadow_eval = ShadowEvaluationPlane(self.paths.evaluations)
         self.containment = RuntimeContainmentPlane()
@@ -1470,6 +1647,8 @@ class SovereignModelServerWorkshop:
         base_checkpoint: str | None,
         dataset_ids: tuple[str, ...],
         quorum_proof: str,
+        execution_mode: str = "actual",
+        training_command: str | None = None,
     ) -> dict[str, Any]:
         def _mutate() -> dict[str, Any]:
             dataset_state = _load_json(
@@ -1519,6 +1698,9 @@ class SovereignModelServerWorkshop:
                 model_family=model_family,
                 base_checkpoint=base_checkpoint,
                 dataset_manifests=manifests,
+                dataset_paths=[dataset_paths[dataset_id] for dataset_id in dataset_ids],
+                execution_mode=execution_mode,
+                training_command=training_command,
             )
 
             continuity_state = _load_json(
@@ -1546,6 +1728,8 @@ class SovereignModelServerWorkshop:
                     "model_family": model_family,
                     "run_id": run_payload["run_id"],
                     "checkpoint_hash": checkpoint.checkpoint_hash,
+                    "execution_mode": checkpoint.execution_mode,
+                    "artifact_uri": checkpoint.artifact_uri,
                 },
             )
 
@@ -1592,6 +1776,14 @@ class SovereignModelServerWorkshop:
                 dataset_ids=tuple(checkpoint_raw["dataset_ids"]),
                 checkpoint_hash=checkpoint_raw["checkpoint_hash"],
                 created_at=checkpoint_raw["created_at"],
+                execution_mode=checkpoint_raw.get(
+                    "execution_mode",
+                    "simulated",
+                ),
+                artifact_uri=checkpoint_raw.get(
+                    "artifact_uri",
+                    f"legacy://{checkpoint_raw['checkpoint_id']}",
+                ),
             )
 
             continuity_ok = self.state_register.assert_unbroken_continuity(
@@ -1739,8 +1931,21 @@ class SovereignModelServerWorkshop:
         self,
         output_path: Path | None = None,
     ) -> dict[str, Any]:
+        training_state = _load_json(
+            self.paths.training_runs,
+            {"runs": [], "checkpoints": []},
+        )
+        training_modes = sorted(
+            {
+                str(item.get("execution_mode", "unknown"))
+                for item in training_state.get("runs", [])
+            },
+        )
         report = {
             "generated_at": utc_now(),
+            "readiness_level": "prototype",
+            "training_execution_modes": training_modes,
+            "training_is_simulated": "simulated" in training_modes,
             "charter_exists": (
                 self.paths.founding_dir / "server_charter_v1.json"
             ).exists(),
@@ -1756,7 +1961,7 @@ class SovereignModelServerWorkshop:
                 ],
             ),
             "training_runs": len(
-                _load_json(self.paths.training_runs, {"runs": []})["runs"],
+                training_state["runs"],
             ),
             "evaluations": len(
                 _load_json(self.paths.evaluations, {"evaluations": []})[

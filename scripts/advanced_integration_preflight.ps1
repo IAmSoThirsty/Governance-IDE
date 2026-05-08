@@ -22,6 +22,25 @@ function Invoke-Checked {
     }
 }
 
+function Assert-PythonVersion {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$FilePath
+    )
+
+    $version = & $FilePath -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"
+    if ($LASTEXITCODE -ne 0) {
+        throw "Unable to determine Python version for $FilePath"
+    }
+
+    $parts = [string]$version -split "\."
+    $major = [int]$parts[0]
+    $minor = [int]$parts[1]
+    if (($major -lt 3) -or (($major -eq 3) -and ($minor -lt 11))) {
+        throw "Python >= 3.11 is required; found $version at $FilePath"
+    }
+}
+
 $repoRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $repoRoot
 
@@ -46,6 +65,7 @@ try {
     if (-not (Test-Path -LiteralPath $PythonExe)) {
         throw "Python executable not found at $PythonExe"
     }
+    Assert-PythonVersion -FilePath $PythonExe
     Add-Check -Name "python_executable" -Status "pass" -Detail $PythonExe
 
     $requiredPaths = @(
@@ -118,7 +138,13 @@ try {
     Add-Check -Name "local_quality_gate" -Status "pass" -Detail "Compile and test gates passed"
 
     Invoke-Checked -FilePath "powershell" -Arguments @(
-        "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "scripts/preprod_inspection.ps1"
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "scripts/preprod_inspection.ps1",
+        "-PythonExe",
+        $PythonExe
     )
     Add-Check -Name "preprod_inspection" -Status "pass" -Detail "Preprod inspection passed"
 

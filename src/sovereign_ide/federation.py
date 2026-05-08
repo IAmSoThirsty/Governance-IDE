@@ -134,6 +134,10 @@ class FederationPolicyEngine:
         )
 
 
+class FederatedLedgerIntegrityError(RuntimeError):
+    """Raised when federated artifact ledger integrity checks fail."""
+
+
 class FederatedArtifactLedger:
     """Append-only ledger for federation exchange requests and decisions."""
 
@@ -146,12 +150,96 @@ class FederatedArtifactLedger:
         self._hydrate()
 
     def _hydrate(self) -> None:
-        for line in self.path.read_text(encoding="utf-8").splitlines():
+        previous_hash: str | None = None
+        expected_sequence = 1
+
+        for line_number, line in enumerate(
+            self.path.read_text(encoding="utf-8").splitlines(),
+            start=1,
+        ):
             if not line.strip():
                 continue
-            item = json.loads(line)
-            self._sequence = max(self._sequence, int(item.get("sequence", 0)))
-            self._last_hash = item.get("entry_hash")
+            try:
+                item = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise FederatedLedgerIntegrityError(
+                    f"federation_ledger_invalid_json:line={line_number}",
+                ) from exc
+
+            self._verify_entry(
+                item,
+                expected_sequence=expected_sequence,
+                previous_hash=previous_hash,
+                line_number=line_number,
+            )
+            self._sequence = expected_sequence
+            self._last_hash = str(item["entry_hash"])
+            previous_hash = self._last_hash
+            expected_sequence += 1
+
+    @staticmethod
+    def _entry_hash_input(entry: dict[str, object]) -> dict[str, object]:
+        hash_input = dict(entry)
+        hash_input.pop("entry_hash", None)
+        return hash_input
+
+    def _verify_entry(
+        self,
+        entry: dict[str, object],
+        *,
+        expected_sequence: int,
+        previous_hash: str | None,
+        line_number: int,
+    ) -> None:
+        required_fields = {
+            "entry_id",
+            "sequence",
+            "recorded_at",
+            "payload",
+            "previous_hash",
+            "entry_hash",
+        }
+        missing = required_fields.difference(entry.keys())
+        if missing:
+            raise FederatedLedgerIntegrityError(
+                "federation_ledger_entry_missing_fields:"
+                f"line={line_number}:missing={','.join(sorted(missing))}",
+            )
+
+        try:
+            sequence = int(entry["sequence"])
+        except (TypeError, ValueError) as exc:
+            raise FederatedLedgerIntegrityError(
+                f"federation_ledger_invalid_sequence:line={line_number}",
+            ) from exc
+
+        if sequence != expected_sequence:
+            raise FederatedLedgerIntegrityError(
+                "federation_ledger_sequence_mismatch:"
+                f"line={line_number}:expected={expected_sequence}:"
+                f"actual={sequence}",
+            )
+
+        if entry.get("previous_hash") != previous_hash:
+            raise FederatedLedgerIntegrityError(
+                "federation_ledger_previous_hash_mismatch:"
+                f"line={line_number}:expected={previous_hash}:"
+                f"actual={entry.get('previous_hash')}",
+            )
+
+        expected_entry_hash = hashlib.sha256(
+            json.dumps(
+                self._entry_hash_input(entry),
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8"),
+        ).hexdigest()
+        if entry.get("entry_hash") != expected_entry_hash:
+            raise FederatedLedgerIntegrityError(
+                "federation_ledger_entry_hash_mismatch:"
+                f"line={line_number}:expected={expected_entry_hash}:"
+                f"actual={entry.get('entry_hash')}",
+            )
 
     def append(
         self,

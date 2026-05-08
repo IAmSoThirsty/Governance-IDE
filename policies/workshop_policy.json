@@ -13,7 +13,7 @@
   },
   "workspace": {
     "allowed_roots": [
-      "t:/Sovereign IDE"
+      "${SOVEREIGN_WORKSPACE_ROOT}"
     ]
   },
   "risk_scores": {

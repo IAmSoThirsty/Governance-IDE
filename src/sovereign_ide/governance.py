@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from contextlib import contextmanager
 from pathlib import Path
 import hmac
 import hashlib
 import json
+import os
 from typing import Any, Callable
 
 from .models import (
@@ -27,6 +29,7 @@ from .models import (
     to_primitive,
     utc_now,
 )
+from .validation import load_policy_pack, validate_policy_pack
 
 
 MUTATION_ORDER = {
@@ -180,26 +183,28 @@ class HashChainJournal:
         trace_id: str,
         payload: Any,
     ) -> dict[str, Any]:
-        entry = {
-            "entry_id": new_id("journal"),
-            "sequence": self._entry_count + 1,
-            "timestamp": utc_now(),
-            "record_type": record_type,
-            "trace_id": trace_id,
-            "payload": to_primitive(payload),
-            "previous_hash": self._last_hash,
-        }
-        entry_hash = hashlib.sha256(
-            canonical_json(entry).encode("utf-8"),
-        ).hexdigest()
-        entry["entry_hash"] = entry_hash
+        with self._journal_lock():
+            self._hydrate_state()
+            entry = {
+                "entry_id": new_id("journal"),
+                "sequence": self._entry_count + 1,
+                "timestamp": utc_now(),
+                "record_type": record_type,
+                "trace_id": trace_id,
+                "payload": to_primitive(payload),
+                "previous_hash": self._last_hash,
+            }
+            entry_hash = hashlib.sha256(
+                canonical_json(entry).encode("utf-8"),
+            ).hexdigest()
+            entry["entry_hash"] = entry_hash
 
-        with self.path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
+            with self.path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
-        self._entry_count += 1
-        self._last_hash = entry_hash
-        return entry
+            self._entry_count += 1
+            self._last_hash = entry_hash
+            return entry
 
     def read_all(self) -> list[dict[str, Any]]:
         return self._load_and_verify_entries()
@@ -208,6 +213,30 @@ class HashChainJournal:
         return [
             entry for entry in self.read_all() if entry["trace_id"] == trace_id
         ]
+
+    @contextmanager
+    def _journal_lock(self):
+        lock_path = self.path.with_suffix(self.path.suffix + ".lock")
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        with lock_path.open("a+b") as handle:
+            if os.name == "nt":
+                import msvcrt
+
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+                try:
+                    yield
+                finally:
+                    handle.seek(0)
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+                try:
+                    yield
+                finally:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 class HMACDecisionSigner:
@@ -246,12 +275,16 @@ class PolicyEngine:
     """Evaluates mutation requests under conservative default-deny policy."""
 
     def __init__(self, policy_pack: dict[str, Any]) -> None:
+        validate_policy_pack(policy_pack)
         self.policy_pack = policy_pack
 
     @classmethod
-    def from_path(cls, policy_path: str | Path) -> "PolicyEngine":
-        path = Path(policy_path)
-        policy = json.loads(path.read_text(encoding="utf-8"))
+    def from_path(
+        cls,
+        policy_path: str | Path,
+        workspace_root: str | Path | None = None,
+    ) -> "PolicyEngine":
+        policy = load_policy_pack(policy_path, workspace_root=workspace_root)
         return cls(policy)
 
     def evaluate(

@@ -49,6 +49,25 @@ function Invoke-PsScript {
     )
 }
 
+function Assert-PythonVersion {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$FilePath
+    )
+
+    $version = & $FilePath -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"
+    if ($LASTEXITCODE -ne 0) {
+        throw "Unable to determine Python version for $FilePath"
+    }
+
+    $parts = [string]$version -split "\."
+    $major = [int]$parts[0]
+    $minor = [int]$parts[1]
+    if (($major -lt 3) -or (($major -eq 3) -and ($minor -lt 11))) {
+        throw "Python >= 3.11 is required; found $version at $FilePath"
+    }
+}
+
 function Add-Result {
     param(
         [string]$Name,
@@ -97,12 +116,13 @@ function Invoke-Step {
 if (-not (Test-Path -LiteralPath $PythonExe)) {
     throw "Python executable not found at $PythonExe"
 }
+Assert-PythonVersion -FilePath $PythonExe
 
 $env:PYTHONPATH = "src"
 
 Invoke-Step -Name "compile_sources" -Action {
     Invoke-Checked -FilePath $PythonExe -Arguments @(
-        "-m", "compileall", "-q", "src", "tests"
+        "-m", "compileall", "-q", "src", "tests", "scripts"
     )
 }
 

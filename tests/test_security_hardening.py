@@ -20,6 +20,8 @@ from sovereign_ide.airgap import AirgapBundleGuard  # noqa: E402
 from sovereign_ide.config import get_settings  # noqa: E402
 from sovereign_ide.federation import (  # noqa: E402
     ArtifactExchangeRequest,
+    FederatedArtifactLedger,
+    FederatedLedgerIntegrityError,
     FederationPolicyEngine,
     TrustDomainExchangeRule,
 )
@@ -37,9 +39,15 @@ from sovereign_ide.models import (  # noqa: E402
     DecisionOutcome,
     GovernanceContext,
     MutationClass,
+    PolicyEvaluationRequest,
     canonical_json,
     new_id,
     utc_now,
+)
+from sovereign_ide.supply_chain import (  # noqa: E402
+    ArtifactType,
+    PromotionTier,
+    SupplyChainRegistry,
 )
 
 
@@ -501,6 +509,178 @@ class SettingsHardeningTests(unittest.TestCase):
                 settings = get_settings(root)
                 self.assertEqual(settings.workspace_root, root.resolve())
                 self.assertEqual(settings.signing_key, "b" * 64)
+
+
+class ArtifactValidationHardeningTests(unittest.TestCase):
+    def test_policy_placeholder_renders_to_current_workspace(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            policy_path = root / "policy.json"
+            policy_path.write_text(
+                json.dumps(
+                    {
+                        "version": "1.0.0",
+                        "resolution": {
+                            "default": "deny",
+                            "precedence": ["invariants"],
+                        },
+                        "workspace": {
+                            "allowed_roots": [
+                                "${SOVEREIGN_WORKSPACE_ROOT}",
+                            ],
+                        },
+                        "risk_scores": {
+                            "read": 10,
+                            "softMutation": 35,
+                            "hardMutation": 70,
+                            "governanceMutation": 90,
+                        },
+                        "actions": {
+                            "run_tests": {
+                                "required_mutation_class": "softMutation",
+                                "allowed_roles": ["developer"],
+                                "quorum_required": False,
+                            },
+                        },
+                    },
+                ),
+                encoding="utf-8",
+            )
+
+            engine = PolicyEngine.from_path(policy_path, workspace_root=root)
+            context = GovernanceContext(
+                trace_id=new_id("trace"),
+                actor_id="dev1",
+                actor_roles=("developer",),
+                tenant="tenant1",
+                trust_domain="domain1",
+                workspace_root=str(root),
+                classification="confidential",
+                policy_pack_version="1.0.0",
+            )
+            token = CapabilityToken(
+                token_id=new_id("token"),
+                subject="dev1",
+                scopes=("run_tests",),
+                trust_domain="domain1",
+                issued_at=utc_now(),
+                expires_at="2999-01-01T00:00:00+00:00",
+                revoked=False,
+            )
+            request = PolicyEvaluationRequest(
+                request_id=new_id("request"),
+                trace_id=context.trace_id,
+                action="run_tests",
+                resource=str(root / "inside.py"),
+                mutation_class=MutationClass.SOFT_MUTATION,
+                requested_by="dev1",
+            )
+
+            evaluation = engine.evaluate(request, context, token)
+            self.assertTrue(evaluation.allowed, msg=evaluation.denial_reasons)
+
+    def test_federation_ledger_hash_chain_tamper_is_detected(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ledger_path = Path(tmp) / "federation.jsonl"
+            ledger = FederatedArtifactLedger(ledger_path)
+            request = ArtifactExchangeRequest(
+                exchange_id=new_id("exchange"),
+                trace_id=new_id("trace"),
+                source_domain="d1",
+                target_domain="d2",
+                artifact_id="artifact-1",
+                artifact_type="model",
+                classification="confidential",
+                exportable=True,
+                requested_by="operator",
+                requested_at=utc_now(),
+            )
+            decision = FederationPolicyEngine(
+                trusted_domains=("d1", "d2"),
+                rules=(TrustDomainExchangeRule("d1", "d2", "confidential"),),
+            ).evaluate(request, trust_bundle_fresh=True)
+            ledger.append(request, decision)
+
+            entries = [
+                json.loads(line)
+                for line in ledger_path.read_text(
+                    encoding="utf-8",
+                ).splitlines()
+                if line.strip()
+            ]
+            entries[0]["payload"]["decision"]["reason"] = "tampered"
+            ledger_path.write_text(
+                "\n".join(json.dumps(entry) for entry in entries) + "\n",
+                encoding="utf-8",
+            )
+
+            with self.assertRaises(FederatedLedgerIntegrityError):
+                FederatedArtifactLedger(ledger_path)
+
+
+class SupplyChainEvidenceHardeningTests(unittest.TestCase):
+    def test_promotion_requires_bound_evidence_not_just_flags(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            registry = SupplyChainRegistry(Path(tmp) / "supply_chain.json")
+            registry.register_candidate(
+                artifact_id="artifact-1",
+                artifact_type=ArtifactType.EXTENSION,
+                publisher="publisher",
+                checksum="a" * 64,
+                signature_verified=True,
+                static_scan_passed=True,
+                dependency_scan_passed=True,
+                provenance_verified=False,
+                airgap_manifest_approved=False,
+            )
+
+            with self.assertRaisesRegex(ValueError, "evidence_missing"):
+                registry.promote(
+                    artifact_id="artifact-1",
+                    target_tier=PromotionTier.ENTERPRISE_REVIEWED,
+                    decision_record_id="decision_1",
+                    reason="no evidence bound",
+                    attested_workload=False,
+                )
+
+    def test_promotion_passes_with_required_bound_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            registry = SupplyChainRegistry(Path(tmp) / "supply_chain.json")
+            registry.register_candidate(
+                artifact_id="artifact-1",
+                artifact_type=ArtifactType.EXTENSION,
+                publisher="publisher",
+                checksum="a" * 64,
+                signature_verified=True,
+                static_scan_passed=True,
+                dependency_scan_passed=True,
+                provenance_verified=False,
+                airgap_manifest_approved=False,
+            )
+            for evidence_type in (
+                "signature",
+                "static_scan",
+                "dependency_scan",
+            ):
+                registry.register_evidence(
+                    artifact_id="artifact-1",
+                    evidence_type=evidence_type,
+                    passed=True,
+                    evidence_ref=f"evidence://{evidence_type}/artifact-1",
+                )
+
+            promoted = registry.promote(
+                artifact_id="artifact-1",
+                target_tier=PromotionTier.ENTERPRISE_REVIEWED,
+                decision_record_id="decision_1",
+                reason="evidence bound",
+                attested_workload=False,
+            )
+
+            self.assertEqual(
+                promoted.current_tier,
+                PromotionTier.ENTERPRISE_REVIEWED.value,
+            )
 
 
 if __name__ == "__main__":

@@ -22,6 +22,7 @@ from .models import (
     to_primitive,
     utc_now,
 )
+from .service import serve
 from .workshop import SovereignModelServerWorkshop
 
 
@@ -80,7 +81,10 @@ def _build_runtime(workspace_root: Path | None = None) -> GovernanceRuntime:
     settings = get_settings(workspace_root)
     settings.state_dir.mkdir(parents=True, exist_ok=True)
 
-    policy_engine = PolicyEngine.from_path(settings.policy_path)
+    policy_engine = PolicyEngine.from_path(
+        settings.policy_path,
+        workspace_root=settings.workspace_root,
+    )
     journal = HashChainJournal(settings.journal_path)
     signer = HMACDecisionSigner(settings.signing_key)
     return GovernanceRuntime(
@@ -277,6 +281,15 @@ def cmd_evaluate(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_serve(args: argparse.Namespace) -> int:
+    serve(
+        workspace_root=Path(args.workspace_root).resolve(),
+        host=args.host,
+        port=args.port,
+    )
+    return 0
+
+
 def cmd_workshop_init(args: argparse.Namespace) -> int:
     workshop = _build_workshop(args)
     context = _workshop_context(args)
@@ -320,6 +333,8 @@ def cmd_workshop_train(args: argparse.Namespace) -> int:
         base_checkpoint=base_checkpoint,
         dataset_ids=_csv_values(args.dataset_ids),
         quorum_proof=args.quorum_proof,
+        execution_mode=args.execution_mode,
+        training_command=args.training_command or None,
     )
     _print_json(result)
     return 0
@@ -475,6 +490,12 @@ def build_parser() -> argparse.ArgumentParser:
     evaluate.add_argument("--session-file", required=True)
     evaluate.set_defaults(func=cmd_evaluate)
 
+    serve_parser = subparsers.add_parser("serve")
+    serve_parser.add_argument("--workspace-root", default=str(Path.cwd()))
+    serve_parser.add_argument("--host", default="127.0.0.1")
+    serve_parser.add_argument("--port", type=int, default=8765)
+    serve_parser.set_defaults(func=cmd_serve)
+
     workshop_init = subparsers.add_parser("workshop-init")
     _add_workshop_common_args(workshop_init, include_quorum=True)
     workshop_init.set_defaults(func=cmd_workshop_init)
@@ -496,6 +517,12 @@ def build_parser() -> argparse.ArgumentParser:
     workshop_train.add_argument("--model-family", required=True)
     workshop_train.add_argument("--base-checkpoint", default="")
     workshop_train.add_argument("--dataset-ids", required=True)
+    workshop_train.add_argument(
+        "--execution-mode",
+        choices=("actual", "simulated"),
+        default="actual",
+    )
+    workshop_train.add_argument("--training-command", default="")
     workshop_train.set_defaults(func=cmd_workshop_train)
 
     workshop_eval = subparsers.add_parser("workshop-eval")

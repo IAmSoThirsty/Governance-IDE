@@ -10,6 +10,9 @@ components:
   endpoint:
     local_runtime: true
     policy_sync: scheduled
+    service_api:
+      bind: 127.0.0.1
+      auth: bearer_token_required
   governance:
     audit_export: enabled
     replay_validation: required

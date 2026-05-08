@@ -43,6 +43,17 @@ class PromotionEvent:
 
 
 @dataclass(frozen=True)
+class ArtifactEvidenceRecord:
+    evidence_id: str
+    artifact_id: str
+    evidence_type: str
+    passed: bool
+    evidence_ref: str
+    recorded_at: str
+    details: dict[str, Any]
+
+
+@dataclass(frozen=True)
 class ArtifactLifecycleRecord:
     artifact_id: str
     artifact_type: ArtifactType
@@ -56,6 +67,7 @@ class ArtifactLifecycleRecord:
     current_tier: str
     revoked: bool
     incident_refs: tuple[str, ...]
+    evidence_ids: tuple[str, ...]
     promotion_history: tuple[PromotionEvent, ...]
 
 
@@ -66,8 +78,12 @@ class SupplyChainRegistry:
         self.path = Path(state_path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         if not self.path.exists():
-            self.path.write_text(json.dumps({"artifacts": {}}, indent=2))
+            self.path.write_text(
+                json.dumps({"artifacts": {}, "evidence": {}}, indent=2),
+            )
         self._state = json.loads(self.path.read_text(encoding="utf-8"))
+        self._state.setdefault("artifacts", {})
+        self._state.setdefault("evidence", {})
 
     def register_candidate(
         self,
@@ -97,11 +113,46 @@ class SupplyChainRegistry:
             current_tier=PromotionTier.COMMUNITY.value,
             revoked=False,
             incident_refs=tuple(),
+            evidence_ids=tuple(),
             promotion_history=tuple(),
         )
         self._state["artifacts"][artifact_id] = to_primitive(record)
         self._save()
         return record
+
+    def register_evidence(
+        self,
+        artifact_id: str,
+        evidence_type: str,
+        passed: bool,
+        evidence_ref: str,
+        details: dict[str, Any] | None = None,
+    ) -> ArtifactEvidenceRecord:
+        record = self.get_record(artifact_id)
+        if not evidence_type:
+            raise ValueError("evidence_type is required")
+        if not evidence_ref:
+            raise ValueError("evidence_ref is required")
+
+        evidence = ArtifactEvidenceRecord(
+            evidence_id=new_id("evidence"),
+            artifact_id=artifact_id,
+            evidence_type=evidence_type,
+            passed=passed,
+            evidence_ref=evidence_ref,
+            recorded_at=utc_now(),
+            details=details or {},
+        )
+        self._state["evidence"][evidence.evidence_id] = to_primitive(
+            evidence,
+        )
+        updated = replace(
+            record,
+            evidence_ids=record.evidence_ids + (evidence.evidence_id,),
+        )
+        self._state["artifacts"][artifact_id] = to_primitive(updated)
+        self._save()
+        return evidence
 
     def promote(
         self,
@@ -208,7 +259,55 @@ class SupplyChainRegistry:
             if not attested_workload:
                 blockers.append("attested_workload_required")
 
+        required_evidence = self._required_evidence_types(target_tier)
+        for evidence_type in required_evidence:
+            if not self._has_passing_evidence(record, evidence_type):
+                blockers.append(f"evidence_missing:{evidence_type}")
+
+        if (
+            target_tier == PromotionTier.ENCLAVE_ALLOWED
+            and attested_workload
+            and not self._has_passing_evidence(record, "attested_workload")
+        ):
+            blockers.append("evidence_missing:attested_workload")
+
         return blockers
+
+    @staticmethod
+    def _required_evidence_types(
+        target_tier: PromotionTier,
+    ) -> tuple[str, ...]:
+        evidence = [
+            "signature",
+            "static_scan",
+            "dependency_scan",
+        ]
+        if target_tier in {
+            PromotionTier.SOVEREIGN_APPROVED,
+            PromotionTier.ENCLAVE_ALLOWED,
+        }:
+            evidence.append("provenance")
+        if target_tier == PromotionTier.ENCLAVE_ALLOWED:
+            evidence.append("airgap_manifest")
+        return tuple(evidence)
+
+    def _has_passing_evidence(
+        self,
+        record: ArtifactLifecycleRecord,
+        evidence_type: str,
+    ) -> bool:
+        for evidence_id in record.evidence_ids:
+            raw = self._state["evidence"].get(evidence_id)
+            if not raw:
+                continue
+            evidence = self._evidence_from_dict(raw)
+            if (
+                evidence.artifact_id == record.artifact_id
+                and evidence.evidence_type == evidence_type
+                and evidence.passed
+            ):
+                return True
+        return False
 
     def _record_from_dict(
         self,
@@ -238,7 +337,22 @@ class SupplyChainRegistry:
             current_tier=str(raw["current_tier"]),
             revoked=bool(raw["revoked"]),
             incident_refs=tuple(raw.get("incident_refs", [])),
+            evidence_ids=tuple(raw.get("evidence_ids", [])),
             promotion_history=events,
+        )
+
+    @staticmethod
+    def _evidence_from_dict(
+        raw: dict[str, Any],
+    ) -> ArtifactEvidenceRecord:
+        return ArtifactEvidenceRecord(
+            evidence_id=raw["evidence_id"],
+            artifact_id=raw["artifact_id"],
+            evidence_type=raw["evidence_type"],
+            passed=bool(raw["passed"]),
+            evidence_ref=raw["evidence_ref"],
+            recorded_at=raw["recorded_at"],
+            details=dict(raw.get("details", {})),
         )
 
     def _save(self) -> None:

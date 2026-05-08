@@ -37,12 +37,32 @@ function Invoke-CheckedJson {
     }
 }
 
+function Assert-PythonVersion {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$FilePath
+    )
+
+    $version = & $FilePath -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"
+    if ($LASTEXITCODE -ne 0) {
+        throw "Unable to determine Python version for $FilePath"
+    }
+
+    $parts = [string]$version -split "\."
+    $major = [int]$parts[0]
+    $minor = [int]$parts[1]
+    if (($major -lt 3) -or (($major -eq 3) -and ($minor -lt 11))) {
+        throw "Python >= 3.11 is required; found $version at $FilePath"
+    }
+}
+
 $repoRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $repoRoot
 
 if (-not (Test-Path -LiteralPath $PythonExe)) {
     throw "Python executable not found at $PythonExe"
 }
+Assert-PythonVersion -FilePath $PythonExe
 
 $docPaths = Get-ChildItem -Path $DocsGlob -File -ErrorAction SilentlyContinue |
     Select-Object -ExpandProperty FullName
@@ -102,7 +122,8 @@ for ($attempt = 1; $attempt -le $MaxTrainingAttempts; $attempt++) {
     ) + $common + @(
         "--quorum-proof", "train-quorum",
         "--model-family", "project-ai-constitutional-$attempt",
-        "--dataset-ids", $datasetCsv
+        "--dataset-ids", $datasetCsv,
+        "--execution-mode", "simulated"
     )
     $train = Invoke-CheckedJson -FilePath $PythonExe -Arguments $trainArgs
 

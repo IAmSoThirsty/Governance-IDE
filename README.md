@@ -61,6 +61,30 @@ This repository implements a local-first, offline-capable governance core with:
 - Generated report:
   - `integration/out/advanced_integration_report.json`
 
+## Runtime service API
+
+- Start local service:
+  - `python -m sovereign_ide.cli serve --host 127.0.0.1 --port 8765`
+- Optional bearer-token protection:
+  - Set `SOVEREIGN_SERVICE_TOKEN`.
+  - `/health` remains public.
+  - `/ready` and `/v1/*` require `Authorization: Bearer <token>`.
+- Current endpoints:
+  - `GET /health`
+  - `GET /ready`
+  - `GET /v1/policy`
+  - `GET /v1/audit/replay?trace_id=...`
+  - `POST /v1/policy/evaluate`
+
+## Container deployment
+
+- Build:
+  - `docker build -f deployments/Dockerfile -t sovereign-ide-runtime .`
+- Run:
+  - `docker run --rm -p 8765:8765 -e SOVEREIGN_SIGNING_KEY=... -e SOVEREIGN_SERVICE_TOKEN=... sovereign-ide-runtime`
+- Production gate before release:
+  - `./scripts/production_readiness_gate.ps1 -PythonExe C:\Path\To\Python312\python.exe`
+
 ## Project-AI Sovereign Model Server Workshop
 
 - Workshop constitutional artifacts:
@@ -80,6 +104,10 @@ This repository implements a local-first, offline-capable governance core with:
   - `python -m sovereign_ide.cli workshop-build-datasets ...`
 - Run governed training:
   - `python -m sovereign_ide.cli workshop-train ...`
+  - Actual fine-tuning is the default and requires a configured trainer:
+    - `python -m sovereign_ide.cli workshop-train ... --execution-mode actual --training-command "python scripts/trainers/trl_sft_trainer.py"`
+  - The trainer receives `--request` and `--output`, reads workshop dataset artifacts, fine-tunes the requested `--model-family`, and returns a checkpoint manifest.
+  - For quick governance-only smoke tests, use `--execution-mode simulated` explicitly.
 - Execute shadow evaluation:
   - `python -m sovereign_ide.cli workshop-eval ...`
 - Promote candidate checkpoint with quorum:

@@ -19,6 +19,17 @@ runtime:
         - compensate
         - replay
         - evaluate
+        - serve
+    http:
+      command: python -m sovereign_ide.cli serve
+      defaultBind: 127.0.0.1
+      optionalBearerTokenEnv: SOVEREIGN_SERVICE_TOKEN
+      endpoints:
+        - GET /health
+        - GET /ready
+        - GET /v1/policy
+        - GET /v1/audit/replay?trace_id=...
+        - POST /v1/policy/evaluate
 
 requiredEnvironment:
   required:
@@ -75,9 +86,13 @@ eventSurface:
 integrationSequence:
   - step: provision-runtime-secrets
     required: true
+  - step: set-service-token
+    required: true
   - step: run-preproduction-inspection
     required: true
   - step: run-advanced-integration-preflight
+    required: true
+  - step: run-production-readiness-gate
     required: true
   - step: bind-to-system-orchestrator
     required: true

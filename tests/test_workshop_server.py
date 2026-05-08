@@ -132,6 +132,7 @@ class WorkshopServerTests(unittest.TestCase):
                 base_checkpoint=None,
                 dataset_ids=dataset_ids,
                 quorum_proof="train-quorum",
+                execution_mode="simulated",
             )
             checkpoint_id = train_result["payload"]["checkpoint"][
                 "checkpoint_id"
@@ -186,6 +187,103 @@ class WorkshopServerTests(unittest.TestCase):
         self.assertEqual(promote_result["decision"]["outcome"], "approved")
         self.assertTrue(
             promote_result["payload"]["promotion_bundle"]["quorum_met"],
+        )
+
+    def test_training_report_discloses_simulation_mode(self) -> None:
+        dataset_ids = self._bootstrap_and_prepare_datasets()
+        train_result = self.workshop.start_training_run(
+            context=self._context(
+                actor="trainer",
+                roles=("model_steward", "release_authority"),
+            ),
+            model_family="project-ai-constitutional-simulated",
+            base_checkpoint=None,
+            dataset_ids=dataset_ids,
+            quorum_proof="train-quorum",
+            execution_mode="simulated",
+        )
+
+        self.assertEqual(
+            train_result["payload"]["run"]["status"],
+            "simulated_completed",
+        )
+        self.assertEqual(
+            train_result["payload"]["run"]["execution_mode"],
+            "simulated",
+        )
+        report = self.workshop.export_workshop_report()
+        self.assertEqual(report["readiness_level"], "prototype")
+        self.assertTrue(report["training_is_simulated"])
+        self.assertIn("simulated", report["training_execution_modes"])
+
+    def test_actual_training_requires_configured_trainer(self) -> None:
+        dataset_ids = self._bootstrap_and_prepare_datasets()
+        with self.assertRaises(PolicyViolation) as raised:
+            self.workshop.start_training_run(
+                context=self._context(
+                    actor="trainer",
+                    roles=("model_steward", "release_authority"),
+                ),
+                model_family="project-ai-constitutional-actual",
+                base_checkpoint=None,
+                dataset_ids=dataset_ids,
+                quorum_proof="train-quorum",
+            )
+        self.assertIn("actual training requires", str(raised.exception))
+
+    def test_actual_training_uses_trainer_output_manifest(self) -> None:
+        dataset_ids = self._bootstrap_and_prepare_datasets()
+        trainer_path = self.root / "trainer_stub.py"
+        trainer_path.write_text(
+            "\n".join(
+                [
+                    "from pathlib import Path",
+                    "import argparse",
+                    "import hashlib",
+                    "import json",
+                    "parser = argparse.ArgumentParser()",
+                    "parser.add_argument('--request', required=True)",
+                    "parser.add_argument('--output', required=True)",
+                    "args = parser.parse_args()",
+                    "request = json.loads(Path(args.request).read_text())",
+                    "material = json.dumps(request, sort_keys=True)",
+                    "digest = hashlib.sha256(material.encode()).hexdigest()",
+                    "Path(args.output).write_text(json.dumps({",
+                    "    'status': 'completed',",
+                    "    'checkpoint_id': 'checkpoint_actual_test',",
+                    "    'artifact_uri': 'file://' + request['output_dir'],",
+                    "    'checkpoint_hash': digest,",
+                    "}))",
+                ],
+            ),
+            encoding="utf-8",
+        )
+
+        train_result = self.workshop.start_training_run(
+            context=self._context(
+                actor="trainer",
+                roles=("model_steward", "release_authority"),
+            ),
+            model_family="project-ai-constitutional-actual",
+            base_checkpoint=None,
+            dataset_ids=dataset_ids,
+            quorum_proof="train-quorum",
+            execution_mode="actual",
+            training_command=f'"{sys.executable}" "{trainer_path}"',
+        )
+
+        self.assertEqual(train_result["payload"]["run"]["status"], "completed")
+        self.assertEqual(
+            train_result["payload"]["run"]["execution_mode"],
+            "actual",
+        )
+        self.assertEqual(
+            train_result["payload"]["checkpoint"]["checkpoint_id"],
+            "checkpoint_actual_test",
+        )
+        self.assertEqual(
+            train_result["payload"]["checkpoint"]["execution_mode"],
+            "actual",
         )
 
     def test_promotion_denied_without_quorum(self) -> None:
