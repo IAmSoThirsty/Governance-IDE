@@ -79,14 +79,24 @@ Execution is not an inference bypass. A caller must obtain a governed execution
 ticket first; the ticket writes policy evaluation, decision, and audit entries.
 Unreviewed or untrusted models cannot receive execution tickets.
 
+Execution tickets are signed and bind model ID, registry entry hash, policy
+profile, trust level, source type, provenance reference, issue/expiry
+timestamps, ticket purpose, signer type, and signature. Ticket verification is
+fail-closed for tampered payloads, invalid signatures, and expired tickets.
+
 Fine-tuned checkpoints from actual training are registered as new governed
 models and signed through the signer abstraction.
 
 ## Signing And Storage
 
 `hmac-dev` is the local development signer only. It must not be represented as
-production-grade signing. Production deployments should use the signer
-abstraction with Ed25519, KMS, or HSM-backed signing.
+production-grade signing and is rejected outside local runtime mode.
+Production deployments should set `SOVEREIGN_RUNTIME_MODE=production` and use
+the signer abstraction with Ed25519, KMS, or HSM-backed signing.
+
+When `SOVEREIGN_SIGNER_BACKEND=ed25519`, key material must be provided by a
+real secret source via either `SOVEREIGN_ED25519_PRIVATE_KEY_PATH` (preferred
+file-mount secret) or `SOVEREIGN_ED25519_PRIVATE_KEY_PEM`.
 
 Local mode uses the SQLite append-only event journal by default. The file
 journal remains a development fallback through `SOVEREIGN_JOURNAL_BACKEND=file`.

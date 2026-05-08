@@ -21,12 +21,18 @@ from .models import (
     CapabilityToken,
     GovernanceContext,
     MutationClass,
+    SignatureEnvelope,
     new_id,
+    sha256_hex,
     to_primitive,
     utc_now,
 )
-from .model_registry import GovernedModelRegistry
+from .model_registry import GovernedModelRecord, GovernedModelRegistry
 from .validation import load_policy_pack, validate_repository_artifacts
+
+
+DEFAULT_EXECUTION_TICKET_TTL_SECONDS = 900
+MAX_EXECUTION_TICKET_TTL_SECONDS = 3600
 
 
 def build_runtime(workspace_root: str | Path) -> GovernanceRuntime:
@@ -40,6 +46,137 @@ def build_runtime(workspace_root: str | Path) -> GovernanceRuntime:
         journal=build_journal(settings),
         signer=build_decision_signer(settings),
     )
+
+
+def _parse_utc_datetime(value: str, *, field_name: str) -> datetime:
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError as exc:
+        raise ValueError(f"{field_name} must be an ISO-8601 datetime") from exc
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def build_execution_ticket(
+    runtime: GovernanceRuntime,
+    model: GovernedModelRecord,
+    *,
+    purpose: str,
+    ttl_seconds: int = DEFAULT_EXECUTION_TICKET_TTL_SECONDS,
+    issued_at: str | None = None,
+) -> dict[str, Any]:
+    if not purpose.strip():
+        raise ValueError("execution ticket purpose is required")
+    if ttl_seconds <= 0:
+        raise ValueError("execution ticket ttl_seconds must be positive")
+    if ttl_seconds > MAX_EXECUTION_TICKET_TTL_SECONDS:
+        raise ValueError(
+            "execution ticket ttl_seconds exceeds maximum allowed value",
+        )
+
+    issued_dt = (
+        _parse_utc_datetime(issued_at, field_name="issued_at")
+        if issued_at
+        else datetime.now(timezone.utc)
+    )
+    expires_dt = issued_dt + timedelta(seconds=ttl_seconds)
+
+    unsigned_payload = {
+        "ticket_id": new_id("modelExec"),
+        "model_id": model.model_id,
+        "registry_entry_hash": sha256_hex(to_primitive(model)),
+        "policy_profile": model.policy_profile,
+        "trust_level": model.trust_level,
+        "source_type": model.source_type,
+        "provenance_ref": model.provenance_ref,
+        "issued_at": issued_dt.isoformat(),
+        "expires_at": expires_dt.isoformat(),
+        "ticket_purpose": purpose.strip(),
+        "signer_type": type(runtime.signer).__name__,
+    }
+
+    signature = runtime.signer.sign(unsigned_payload)
+    if not runtime.signer.verify(unsigned_payload, signature):
+        raise ValueError("execution ticket signature verification failed")
+
+    return {
+        **unsigned_payload,
+        "signature": to_primitive(signature),
+    }
+
+
+def verify_execution_ticket(
+    ticket: dict[str, Any],
+    signer: Any,
+    *,
+    at_time: str | None = None,
+) -> tuple[bool, str]:
+    required_fields = {
+        "ticket_id",
+        "model_id",
+        "registry_entry_hash",
+        "policy_profile",
+        "trust_level",
+        "source_type",
+        "provenance_ref",
+        "issued_at",
+        "expires_at",
+        "ticket_purpose",
+        "signer_type",
+        "signature",
+    }
+    missing = sorted(required_fields.difference(ticket.keys()))
+    if missing:
+        return False, "missing_fields:" + ",".join(missing)
+
+    signature_raw = ticket.get("signature")
+    if not isinstance(signature_raw, dict):
+        return False, "signature_missing_or_invalid"
+
+    for field in ("algorithm", "key_id", "signature"):
+        if field not in signature_raw:
+            return False, f"signature_field_missing:{field}"
+
+    envelope = SignatureEnvelope(
+        algorithm=str(signature_raw["algorithm"]),
+        key_id=str(signature_raw["key_id"]),
+        signature=str(signature_raw["signature"]),
+        signed_at=str(signature_raw.get("signed_at") or utc_now()),
+    )
+
+    try:
+        issued_at = _parse_utc_datetime(
+            str(ticket["issued_at"]),
+            field_name="issued_at",
+        )
+        expires_at = _parse_utc_datetime(
+            str(ticket["expires_at"]),
+            field_name="expires_at",
+        )
+    except ValueError as exc:
+        return False, str(exc)
+
+    if issued_at >= expires_at:
+        return False, "invalid_ticket_lifetime"
+
+    now = (
+        _parse_utc_datetime(at_time, field_name="at_time")
+        if at_time
+        else datetime.now(timezone.utc)
+    )
+    if now >= expires_at:
+        return False, "ticket_expired"
+
+    unsigned_payload = {
+        key: value
+        for key, value in ticket.items()
+        if key != "signature"
+    }
+    if not signer.verify(unsigned_payload, envelope):
+        return False, "signature_invalid"
+
+    return True, "ok"
 
 
 def readiness_report(workspace_root: str | Path) -> dict[str, Any]:
@@ -228,6 +365,17 @@ def make_handler(workspace_root: str | Path) -> type[BaseHTTPRequestHandler]:
         def _handle_model_execution_ticket(self) -> None:
             body = self._read_json()
             model_id = str(body["model_id"])
+            ticket_purpose = str(
+                body.get("ticket_purpose") or "model_execution",
+            ).strip()
+            if not ticket_purpose:
+                raise ValueError("ticket_purpose must be provided")
+            ticket_ttl_seconds = int(
+                body.get(
+                    "ticket_ttl_seconds",
+                    DEFAULT_EXECUTION_TICKET_TTL_SECONDS,
+                ),
+            )
             settings = get_settings(root)
             model = GovernedModelRegistry(
                 settings.model_registry_path,
@@ -257,7 +405,7 @@ def make_handler(workspace_root: str | Path) -> type[BaseHTTPRequestHandler]:
                 ).isoformat(),
                 revoked=False,
             )
-            request, evaluation, binding = runtime.evaluate_and_bind(
+            _request, evaluation, binding = runtime.evaluate_and_bind(
                 context=context,
                 action="execute_model",
                 resource=str(settings.model_registry_path),
@@ -276,12 +424,12 @@ def make_handler(workspace_root: str | Path) -> type[BaseHTTPRequestHandler]:
             )
             result = runtime.commit_mutation(
                 mutation_binding,
-                lambda: {
-                    "execution_ticket_id": new_id("modelExec"),
-                    "model_id": model.model_id,
-                    "policy_profile": model.policy_profile,
-                    "status": "governed_execution_authorized",
-                },
+                lambda: self._issue_execution_ticket_payload(
+                    runtime,
+                    model,
+                    ticket_purpose,
+                    ticket_ttl_seconds,
+                ),
             )
             self._send_json(
                 {
@@ -291,6 +439,34 @@ def make_handler(workspace_root: str | Path) -> type[BaseHTTPRequestHandler]:
                 },
                 status=200 if result.applied else 403,
             )
+
+        @staticmethod
+        def _issue_execution_ticket_payload(
+            runtime: GovernanceRuntime,
+            model: GovernedModelRecord,
+            ticket_purpose: str,
+            ticket_ttl_seconds: int,
+        ) -> dict[str, Any]:
+            ticket = build_execution_ticket(
+                runtime,
+                model,
+                purpose=ticket_purpose,
+                ttl_seconds=ticket_ttl_seconds,
+            )
+            valid, reason = verify_execution_ticket(ticket, runtime.signer)
+            if not valid:
+                raise ValueError(
+                    "execution ticket verification failed: "
+                    f"{reason}",
+                )
+            return {
+                "status": "governed_execution_authorized",
+                "execution_ticket": ticket,
+                "verification": {
+                    "valid": True,
+                    "reason": reason,
+                },
+            }
 
         def _authorized(self) -> bool:
             token = os.getenv("SOVEREIGN_SERVICE_TOKEN", "").strip()

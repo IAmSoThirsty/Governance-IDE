@@ -24,7 +24,7 @@ from .models import (
     utc_now,
 )
 from .model_registry import GovernedModelRegistry
-from .service import serve
+from .service import build_execution_ticket, serve, verify_execution_ticket
 from .supply_chain import ArtifactType, SupplyChainRegistry
 from .workshop import SovereignModelServerWorkshop
 
@@ -444,7 +444,7 @@ def cmd_model_execution_ticket(args: argparse.Namespace) -> int:
     runtime = _build_runtime(workspace_root)
     context = _governance_context(args)
     token = _capability_token(context, "execute_model")
-    request, evaluation, binding = runtime.evaluate_and_bind(
+    _request, evaluation, binding = runtime.evaluate_and_bind(
         context=context,
         action="execute_model",
         resource=str(settings.model_registry_path),
@@ -464,12 +464,12 @@ def cmd_model_execution_ticket(args: argparse.Namespace) -> int:
     )
     result = runtime.commit_mutation(
         mutation_binding,
-        lambda: {
-            "execution_ticket_id": new_id("modelExec"),
-            "model_id": model.model_id,
-            "policy_profile": model.policy_profile,
-            "status": "governed_execution_authorized",
-        },
+        lambda: _issue_cli_execution_ticket(
+            runtime,
+            model,
+            args.ticket_purpose,
+            args.ticket_ttl_seconds,
+        ),
     )
     _print_json(
         {
@@ -479,6 +479,31 @@ def cmd_model_execution_ticket(args: argparse.Namespace) -> int:
         },
     )
     return 0 if result.applied else 1
+
+
+def _issue_cli_execution_ticket(
+    runtime: GovernanceRuntime,
+    model: Any,
+    ticket_purpose: str,
+    ticket_ttl_seconds: int,
+) -> dict[str, Any]:
+    ticket = build_execution_ticket(
+        runtime,
+        model,
+        purpose=ticket_purpose,
+        ttl_seconds=int(ticket_ttl_seconds),
+    )
+    valid, reason = verify_execution_ticket(ticket, runtime.signer)
+    if not valid:
+        raise ValueError(f"execution ticket verification failed: {reason}")
+    return {
+        "status": "governed_execution_authorized",
+        "execution_ticket": ticket,
+        "verification": {
+            "valid": True,
+            "reason": reason,
+        },
+    }
 
 
 def cmd_workshop_init(args: argparse.Namespace) -> int:
@@ -743,6 +768,8 @@ def build_parser() -> argparse.ArgumentParser:
     model_ticket = subparsers.add_parser("model-execution-ticket")
     _add_governance_common_args(model_ticket, include_quorum=False)
     model_ticket.add_argument("--model-id", required=True)
+    model_ticket.add_argument("--ticket-purpose", default="model_execution")
+    model_ticket.add_argument("--ticket-ttl-seconds", type=int, default=900)
     model_ticket.set_defaults(func=cmd_model_execution_ticket)
 
     workshop_init = subparsers.add_parser("workshop-init")

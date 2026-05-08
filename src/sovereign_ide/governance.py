@@ -278,6 +278,10 @@ class HMACDecisionSigner:
         payload: dict[str, Any],
         envelope: SignatureEnvelope,
     ) -> bool:
+        if envelope.algorithm != "HMAC-SHA256":
+            return False
+        if envelope.key_id != self.key_id:
+            return False
         expected = hmac.new(
             self._key,
             canonical_json(payload).encode("utf-8"),
@@ -287,7 +291,7 @@ class HMACDecisionSigner:
 
 
 class Ed25519DecisionSigner:
-    """Production signer scaffold backed by cryptography when configured."""
+    """Production signer backed by Ed25519 asymmetric signatures."""
 
     def __init__(
         self,
@@ -296,15 +300,19 @@ class Ed25519DecisionSigner:
     ) -> None:
         try:
             from cryptography.hazmat.primitives import serialization
+            from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
         except ImportError as exc:  # pragma: no cover - optional dependency
             raise RuntimeError(
                 "Ed25519 signing requires the cryptography package",
             ) from exc
         self._serialization = serialization
-        self._private_key = serialization.load_pem_private_key(
+        loaded_private_key = serialization.load_pem_private_key(
             private_key_pem.encode("utf-8"),
             password=None,
         )
+        if not isinstance(loaded_private_key, Ed25519PrivateKey):
+            raise ValueError("configured key is not an Ed25519 private key")
+        self._private_key = loaded_private_key
         self._public_key = self._private_key.public_key()
         self.key_id = key_id
 
@@ -323,6 +331,10 @@ class Ed25519DecisionSigner:
         payload: dict[str, Any],
         envelope: SignatureEnvelope,
     ) -> bool:
+        if envelope.algorithm != "Ed25519":
+            return False
+        if envelope.key_id != self.key_id:
+            return False
         try:
             self._public_key.verify(
                 bytes.fromhex(envelope.signature),
@@ -454,16 +466,54 @@ def build_journal(settings: Any, *, path: str | Path | None = None) -> HashChain
     return SQLiteEventJournal(path or settings.sqlite_journal_path)
 
 
-def build_decision_signer(settings: Any) -> DecisionSigner:
-    if settings.signer_backend == "hmac-dev":
-        return HMACDecisionSigner(settings.signing_key)
-    if settings.signer_backend == "ed25519":
-        key = os.getenv("SOVEREIGN_ED25519_PRIVATE_KEY_PEM", "").strip()
-        if not key:
+def _load_ed25519_private_key_material(settings: Any) -> str:
+    inline = str(getattr(settings, "ed25519_private_key_pem", "") or "").strip()
+    if inline:
+        return inline
+
+    key_path = getattr(settings, "ed25519_private_key_path", None)
+    if key_path:
+        path = Path(key_path)
+        if not path.exists():
             raise ValueError(
-                "SOVEREIGN_ED25519_PRIVATE_KEY_PEM is required for ed25519 signing",
+                "configured Ed25519 key file does not exist: "
+                f"{path}",
             )
-        return Ed25519DecisionSigner(key, key_id=os.getenv("SOVEREIGN_SIGNER_KEY_ID", "ed25519"))
+        material = path.read_text(encoding="utf-8").strip()
+        if not material:
+            raise ValueError(
+                "configured Ed25519 key file is empty: "
+                f"{path}",
+            )
+        return material
+
+    raise ValueError(
+        "Ed25519 signing requires key material via "
+        "SOVEREIGN_ED25519_PRIVATE_KEY_PEM or "
+        "SOVEREIGN_ED25519_PRIVATE_KEY_PATH",
+    )
+
+
+def build_decision_signer(settings: Any) -> DecisionSigner:
+    runtime_mode = str(getattr(settings, "runtime_mode", "local") or "local")
+
+    if runtime_mode == "production" and settings.signer_backend != "ed25519":
+        raise ValueError(
+            "production runtime requires SOVEREIGN_SIGNER_BACKEND=ed25519",
+        )
+
+    if settings.signer_backend == "hmac-dev":
+        if runtime_mode != "local":
+            raise ValueError(
+                "hmac-dev signer is allowed only when SOVEREIGN_RUNTIME_MODE=local",
+            )
+        return HMACDecisionSigner(settings.signing_key)
+
+    if settings.signer_backend == "ed25519":
+        key_material = _load_ed25519_private_key_material(settings)
+        key_id = str(getattr(settings, "signer_key_id", "") or "ed25519")
+        return Ed25519DecisionSigner(key_material, key_id=key_id)
+
     raise ValueError("SOVEREIGN_SIGNER_BACKEND must be hmac-dev or ed25519")
 
 

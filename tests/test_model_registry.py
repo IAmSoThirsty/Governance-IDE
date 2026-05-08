@@ -17,8 +17,12 @@ if str(SRC) not in sys.path:
 
 from sovereign_ide.cli import build_parser  # noqa: E402
 from sovereign_ide.config import get_settings  # noqa: E402
-from sovereign_ide.governance import SQLiteEventJournal  # noqa: E402
+from sovereign_ide.governance import (  # noqa: E402
+    SQLiteEventJournal,
+    build_decision_signer,
+)
 from sovereign_ide.model_registry import GovernedModelRegistry  # noqa: E402
+from sovereign_ide.service import verify_execution_ticket  # noqa: E402
 
 
 def _write_policy(root: Path) -> None:
@@ -89,6 +93,24 @@ class ModelRegistryTests(unittest.TestCase):
             self.assertEqual(parsed.func(parsed), 0)
         return json.loads(output.getvalue())
 
+    def _register_local_model(
+        self,
+        registry: GovernedModelRegistry,
+        *,
+        immutable_identifier: str | None = None,
+    ):
+        return registry.register(
+            source_type="local_path",
+            source=str(self.model_path),
+            license="test-license",
+            content_hash=GovernedModelRegistry.hash_local_path(self.model_path),
+            immutable_identifier=immutable_identifier,
+            metadata={"family": "unit-test"},
+            trust_level="reviewed",
+            policy_profile="default-model-policy",
+            provenance_ref="provenance://model.bin",
+        )
+
     def test_model_register_list_and_execution_ticket_are_governed(self) -> None:
         registered = self._run_cli(
             [
@@ -152,6 +174,27 @@ class ModelRegistryTests(unittest.TestCase):
             ticket["payload"]["status"],
             "governed_execution_authorized",
         )
+        execution_ticket = ticket["payload"]["execution_ticket"]
+        for field in (
+            "ticket_id",
+            "model_id",
+            "registry_entry_hash",
+            "policy_profile",
+            "trust_level",
+            "source_type",
+            "provenance_ref",
+            "issued_at",
+            "expires_at",
+            "ticket_purpose",
+            "signer_type",
+            "signature",
+        ):
+            self.assertIn(field, execution_ticket)
+        self.assertEqual(execution_ticket["model_id"], model_id)
+
+        signer = build_decision_signer(get_settings(self.root))
+        valid, reason = verify_execution_ticket(execution_ticket, signer)
+        self.assertTrue(valid, msg=reason)
 
     def test_unreviewed_model_cannot_get_execution_ticket(self) -> None:
         settings = get_settings(self.root)
@@ -176,6 +219,165 @@ class ModelRegistryTests(unittest.TestCase):
         journal.append("event", "trace1", {"index": 2})
         entries = SQLiteEventJournal(self.root / "events.sqlite3").read_all()
         self.assertEqual([entry["sequence"] for entry in entries], [1, 2])
+
+    def test_local_file_registration_has_schema_and_signature_status(self) -> None:
+        settings = get_settings(self.root)
+        registry = GovernedModelRegistry(settings.model_registry_path)
+        record = self._register_local_model(registry)
+
+        self.assertEqual(record.signature_status, "unsigned")
+        self.assertEqual(record.registry_schema_version, "1.1.0")
+        self.assertTrue(record.immutable_identifier.startswith("sha256:"))
+
+    def test_local_directory_hash_is_stable_and_ignores_transient_files(self) -> None:
+        model_dir = self.root / "model_dir"
+        nested = model_dir / "nested"
+        nested.mkdir(parents=True, exist_ok=True)
+        (model_dir / "config.json").write_text('{"layers": 3}', encoding="utf-8")
+        (nested / "weights.bin").write_text("weights-v1", encoding="utf-8")
+
+        hash_before = GovernedModelRegistry.hash_local_path(model_dir)
+
+        transient_dir = model_dir / "__pycache__"
+        transient_dir.mkdir(parents=True, exist_ok=True)
+        (transient_dir / "ignore.pyc").write_bytes(b"compiled")
+        cache_dir = model_dir / ".pytest_cache"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        (cache_dir / "cache.log").write_text("transient", encoding="utf-8")
+
+        hash_after_transient = GovernedModelRegistry.hash_local_path(model_dir)
+        self.assertEqual(hash_before, hash_after_transient)
+
+        (nested / "weights.bin").write_text("weights-v2", encoding="utf-8")
+        hash_after_change = GovernedModelRegistry.hash_local_path(model_dir)
+        self.assertNotEqual(hash_before, hash_after_change)
+
+    def test_huggingface_without_revision_rejected_for_reviewed_trust(self) -> None:
+        settings = get_settings(self.root)
+        registry = GovernedModelRegistry(settings.model_registry_path)
+
+        with self.assertRaisesRegex(ValueError, "requires immutable revision"):
+            registry.register(
+                source_type="huggingface_model_id",
+                source="org/model",
+                license="apache-2.0",
+                content_hash=None,
+                immutable_identifier=None,
+                metadata={},
+                trust_level="reviewed",
+                policy_profile="default-model-policy",
+                provenance_ref="hf://org/model",
+            )
+
+    def test_huggingface_without_revision_is_restricted_for_low_trust(self) -> None:
+        settings = get_settings(self.root)
+        registry = GovernedModelRegistry(settings.model_registry_path)
+
+        record = registry.register(
+            source_type="huggingface_model_id",
+            source="org/model",
+            license="apache-2.0",
+            content_hash=None,
+            immutable_identifier=None,
+            metadata={},
+            trust_level="quarantine",
+            policy_profile="default-model-policy",
+            provenance_ref="hf://org/model",
+        )
+        self.assertEqual(record.admissibility_status, "restricted")
+
+    def test_mutable_endpoint_requires_explicit_immutable_proof_for_reviewed(self) -> None:
+        settings = get_settings(self.root)
+        registry = GovernedModelRegistry(settings.model_registry_path)
+
+        with self.assertRaisesRegex(ValueError, "immutable_endpoint_proof"):
+            registry.register(
+                source_type="openai_compatible_endpoint",
+                source="https://api.example.invalid/v1",
+                license="service-terms",
+                content_hash=None,
+                immutable_identifier=None,
+                metadata={},
+                trust_level="reviewed",
+                policy_profile="default-model-policy",
+                provenance_ref="endpoint://api.example.invalid/v1",
+            )
+
+        low_trust_record = registry.register(
+            source_type="openai_compatible_endpoint",
+            source="https://api.example.invalid/v1",
+            license="service-terms",
+            content_hash=None,
+            immutable_identifier=None,
+            metadata={},
+            trust_level="quarantine",
+            policy_profile="default-model-policy",
+            provenance_ref="endpoint://api.example.invalid/v1",
+        )
+        self.assertEqual(low_trust_record.admissibility_status, "restricted")
+
+    def test_duplicate_immutable_identifier_is_deterministic(self) -> None:
+        settings = get_settings(self.root)
+        registry = GovernedModelRegistry(settings.model_registry_path)
+
+        first = self._register_local_model(
+            registry,
+            immutable_identifier="sha256:fixed-model-id",
+        )
+        second = self._register_local_model(
+            registry,
+            immutable_identifier="sha256:fixed-model-id",
+        )
+        self.assertEqual(first.model_id, second.model_id)
+
+        other_path = self.root / "other-model.bin"
+        other_path.write_text("different-weights", encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "immutable_identifier already registered"):
+            registry.register(
+                source_type="local_path",
+                source=str(other_path),
+                license="test-license",
+                content_hash=GovernedModelRegistry.hash_local_path(other_path),
+                immutable_identifier="sha256:fixed-model-id",
+                metadata={"family": "unit-test"},
+                trust_level="reviewed",
+                policy_profile="default-model-policy",
+                provenance_ref="provenance://other-model.bin",
+            )
+
+    def test_invalid_trust_level_rejected(self) -> None:
+        settings = get_settings(self.root)
+        registry = GovernedModelRegistry(settings.model_registry_path)
+
+        with self.assertRaisesRegex(ValueError, "unsupported trust_level"):
+            registry.register(
+                source_type="local_path",
+                source=str(self.model_path),
+                license="test-license",
+                content_hash=GovernedModelRegistry.hash_local_path(self.model_path),
+                immutable_identifier=None,
+                metadata={},
+                trust_level="not-a-trust-level",
+                policy_profile="default-model-policy",
+                provenance_ref="provenance://model.bin",
+            )
+
+    def test_invalid_policy_profile_rejected(self) -> None:
+        settings = get_settings(self.root)
+        registry = GovernedModelRegistry(settings.model_registry_path)
+
+        with self.assertRaisesRegex(ValueError, "policy_profile"):
+            registry.register(
+                source_type="local_path",
+                source=str(self.model_path),
+                license="test-license",
+                content_hash=GovernedModelRegistry.hash_local_path(self.model_path),
+                immutable_identifier=None,
+                metadata={},
+                trust_level="reviewed",
+                policy_profile="Invalid Profile!",
+                provenance_ref="provenance://model.bin",
+            )
 
 
 if __name__ == "__main__":

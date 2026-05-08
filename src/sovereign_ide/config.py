@@ -13,8 +13,12 @@ MIN_SIGNING_KEY_LENGTH = 64
 @dataclass(frozen=True)
 class Settings:
     workspace_root: Path
+    runtime_mode: str
     signing_key: str
     signer_backend: str
+    signer_key_id: str
+    ed25519_private_key_pem: str
+    ed25519_private_key_path: Path | None
     policy_path: Path
     state_dir: Path
     journal_path: Path
@@ -58,6 +62,37 @@ def _require_signing_key() -> str:
     return signing_key
 
 
+def _runtime_mode() -> str:
+    runtime_mode = os.getenv("SOVEREIGN_RUNTIME_MODE", "local").strip().lower()
+    aliases = {
+        "dev": "local",
+        "development": "local",
+        "prod": "production",
+    }
+    normalized = aliases.get(runtime_mode, runtime_mode)
+    if normalized not in {"local", "rehearsal", "production"}:
+        raise ValueError(
+            "SOVEREIGN_RUNTIME_MODE must be one of local, rehearsal, production",
+        )
+    return normalized
+
+
+def _resolve_signing_key(*, signer_backend: str) -> str:
+    if signer_backend == "hmac-dev":
+        return _require_signing_key()
+    return os.getenv("SOVEREIGN_SIGNING_KEY", "").strip()
+
+
+def _resolve_optional_path(root: Path, raw: str) -> Path | None:
+    value = raw.strip()
+    if not value:
+        return None
+    candidate = Path(value)
+    if not candidate.is_absolute():
+        candidate = root / candidate
+    return candidate.resolve()
+
+
 @lru_cache(maxsize=1)
 def get_settings(workspace_root: str | Path | None = None) -> Settings:
     root = (
@@ -71,7 +106,12 @@ def get_settings(workspace_root: str | Path | None = None) -> Settings:
         "SOVEREIGN_POLICY_PATH",
         "policies/baseline_policy.json",
     )
-    signing_key = _require_signing_key()
+    runtime_mode = _runtime_mode()
+    signer_backend = os.getenv("SOVEREIGN_SIGNER_BACKEND", "hmac-dev").strip()
+    if signer_backend not in {"hmac-dev", "ed25519"}:
+        raise ValueError("SOVEREIGN_SIGNER_BACKEND must be hmac-dev or ed25519")
+
+    signing_key = _resolve_signing_key(signer_backend=signer_backend)
     policy_path = (root / policy_path_env).resolve()
     state_dir = (root / os.getenv("SOVEREIGN_STATE_DIR", "state")).resolve()
     journal_backend = os.getenv("SOVEREIGN_JOURNAL_BACKEND", "sqlite").strip()
@@ -80,8 +120,18 @@ def get_settings(workspace_root: str | Path | None = None) -> Settings:
 
     return Settings(
         workspace_root=root,
+        runtime_mode=runtime_mode,
         signing_key=signing_key,
-        signer_backend=os.getenv("SOVEREIGN_SIGNER_BACKEND", "hmac-dev").strip(),
+        signer_backend=signer_backend,
+        signer_key_id=os.getenv("SOVEREIGN_SIGNER_KEY_ID", "").strip(),
+        ed25519_private_key_pem=os.getenv(
+            "SOVEREIGN_ED25519_PRIVATE_KEY_PEM",
+            "",
+        ).strip(),
+        ed25519_private_key_path=_resolve_optional_path(
+            root,
+            os.getenv("SOVEREIGN_ED25519_PRIVATE_KEY_PATH", ""),
+        ),
         policy_path=policy_path,
         state_dir=state_dir,
         journal_path=state_dir / "governance_journal.jsonl",

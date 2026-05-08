@@ -82,9 +82,24 @@ function Assert-ProductionEnvContract {
         throw "hmac-dev signer is local/dev only and cannot pass production readiness."
     }
     if ($signerBackend -eq "ed25519") {
-        $ed25519Key = Assert-RequiredEnv -Name "SOVEREIGN_ED25519_PRIVATE_KEY_PEM"
-        if ($ed25519Key -match 'REPLACE|PLACEHOLDER|CHANGE_ME') {
+        $ed25519KeyPem = [Environment]::GetEnvironmentVariable("SOVEREIGN_ED25519_PRIVATE_KEY_PEM")
+        $ed25519KeyPath = [Environment]::GetEnvironmentVariable("SOVEREIGN_ED25519_PRIVATE_KEY_PATH")
+
+        if ([string]::IsNullOrWhiteSpace($ed25519KeyPem) -and [string]::IsNullOrWhiteSpace($ed25519KeyPath)) {
+            throw "Ed25519 signer requires SOVEREIGN_ED25519_PRIVATE_KEY_PEM or SOVEREIGN_ED25519_PRIVATE_KEY_PATH."
+        }
+
+        if (-not [string]::IsNullOrWhiteSpace($ed25519KeyPem) -and $ed25519KeyPem -match 'REPLACE|PLACEHOLDER|CHANGE_ME') {
             throw "SOVEREIGN_ED25519_PRIVATE_KEY_PEM looks like a placeholder."
+        }
+
+        if (-not [string]::IsNullOrWhiteSpace($ed25519KeyPath)) {
+            if ($ed25519KeyPath -match 'REPLACE|PLACEHOLDER|CHANGE_ME') {
+                throw "SOVEREIGN_ED25519_PRIVATE_KEY_PATH looks like a placeholder."
+            }
+            if (-not (Test-Path -LiteralPath $ed25519KeyPath)) {
+                throw "SOVEREIGN_ED25519_PRIVATE_KEY_PATH does not exist: $ed25519KeyPath"
+            }
         }
     }
 

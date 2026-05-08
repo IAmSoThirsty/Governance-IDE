@@ -28,9 +28,15 @@ This repository implements a local-first, offline-capable governance core with:
 
 - Configure environment/signing material.
   - Copy `.env.example` to `.env` for local runs.
-  - `SOVEREIGN_SIGNING_KEY` is mandatory and must be high entropy.
+  - `SOVEREIGN_RUNTIME_MODE` defaults to `local`.
+  - `SOVEREIGN_SIGNING_KEY` is mandatory for `hmac-dev` and must be high
+    entropy.
   - Placeholder keys are rejected at runtime.
-  - For production, inject signing key via secure secret management.
+  - `hmac-dev` signing is accepted only in local runtime mode.
+  - Production runtime requires `SOVEREIGN_SIGNER_BACKEND=ed25519` plus key
+    material from either `SOVEREIGN_ED25519_PRIVATE_KEY_PATH` (preferred) or
+    `SOVEREIGN_ED25519_PRIVATE_KEY_PEM`.
+  - For production, inject signing material via secure secret management.
 - Run local bootstrap (Windows/PowerShell):
   - `./bootstrap.local.ps1`
   - Optional full package install: `./bootstrap.local.ps1 -InstallProject`
@@ -115,7 +121,12 @@ This repository implements a local-first, offline-capable governance core with:
 - List registered governed models:
   - `python -m sovereign_ide.cli models-list`
 - Authorize model execution through governance before a caller invokes it:
-  - `python -m sovereign_ide.cli model-execution-ticket --model-id <id> --actor <id> --roles model_steward --tenant <tenant> --trust-domain <domain>`
+  - `python -m sovereign_ide.cli model-execution-ticket --model-id <id> --ticket-purpose <purpose> --ticket-ttl-seconds <seconds> --actor <id> --roles model_steward --tenant <tenant> --trust-domain <domain>`
+- Execution tickets are signed and bind model ID, registry entry hash, policy
+  profile, trust level, source type, provenance, issued/expiry timestamps,
+  purpose, signer type, and signature.
+- Ticket verification fails closed: tampered payloads, invalid signatures, or
+  expired tickets are rejected.
 - HMAC signatures are for dev/local integrity only. Production signing must use
   an Ed25519/KMS/HSM backend through the signer abstraction.
 
