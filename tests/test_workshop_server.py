@@ -286,6 +286,116 @@ class WorkshopServerTests(unittest.TestCase):
             "actual",
         )
 
+    def test_actual_training_rejects_local_artifact_when_store_configured(self) -> None:
+        dataset_ids = self._bootstrap_and_prepare_datasets()
+        trainer_path = self.root / "local_artifact_trainer.py"
+        trainer_path.write_text(
+            "\n".join(
+                [
+                    "from pathlib import Path",
+                    "import argparse",
+                    "import json",
+                    "parser = argparse.ArgumentParser()",
+                    "parser.add_argument('--request', required=True)",
+                    "parser.add_argument('--output', required=True)",
+                    "args = parser.parse_args()",
+                    "request = json.loads(Path(args.request).read_text())",
+                    "Path(args.output).write_text(json.dumps({",
+                    "    'status': 'completed',",
+                    "    'checkpoint_id': 'checkpoint_local_artifact',",
+                    "    'artifact_uri': 'file://' + request['output_dir'],",
+                    "    'checkpoint_hash': '" + ("d" * 64) + "',",
+                    "}))",
+                ],
+            ),
+            encoding="utf-8",
+        )
+
+        with patch.dict(
+            os.environ,
+            {
+                "SOVEREIGN_TRAINING_ARTIFACT_STORE": (
+                    "https://huggingface.co/example/model"
+                ),
+            },
+        ):
+            with self.assertRaises(PolicyViolation) as raised:
+                self.workshop.start_training_run(
+                    context=self._context(
+                        actor="trainer",
+                        roles=("model_steward", "release_authority"),
+                    ),
+                    model_family="project-ai-constitutional-actual",
+                    base_checkpoint=None,
+                    dataset_ids=dataset_ids,
+                    quorum_proof="train-quorum",
+                    execution_mode="actual",
+                    training_command=f'"{sys.executable}" "{trainer_path}"',
+                )
+        self.assertIn("durable storage", str(raised.exception))
+
+    def test_actual_training_request_carries_artifact_store_contract(self) -> None:
+        dataset_ids = self._bootstrap_and_prepare_datasets()
+        trainer_path = self.root / "durable_artifact_trainer.py"
+        trainer_path.write_text(
+            "\n".join(
+                [
+                    "from pathlib import Path",
+                    "import argparse",
+                    "import json",
+                    "parser = argparse.ArgumentParser()",
+                    "parser.add_argument('--request', required=True)",
+                    "parser.add_argument('--output', required=True)",
+                    "args = parser.parse_args()",
+                    "request = json.loads(Path(args.request).read_text())",
+                    "artifact_store = request['artifact_store_uri']",
+                    "Path(args.output).write_text(json.dumps({",
+                    "    'status': 'completed',",
+                    "    'checkpoint_id': 'checkpoint_durable_artifact',",
+                    "    'artifact_uri': artifact_store,",
+                    "    'artifact_store_uri': artifact_store,",
+                    "    'checkpoint_hash': '" + ("e" * 64) + "',",
+                    "}))",
+                ],
+            ),
+            encoding="utf-8",
+        )
+
+        with patch.dict(
+            os.environ,
+            {
+                "SOVEREIGN_TRAINING_BACKEND": "huggingface-jobs",
+                "SOVEREIGN_TRAINING_ARTIFACT_STORE": (
+                    "https://huggingface.co/example/model"
+                ),
+            },
+        ):
+            train_result = self.workshop.start_training_run(
+                context=self._context(
+                    actor="trainer",
+                    roles=("model_steward", "release_authority"),
+                ),
+                model_family="project-ai-constitutional-actual",
+                base_checkpoint=None,
+                dataset_ids=dataset_ids,
+                quorum_proof="train-quorum",
+                execution_mode="actual",
+                training_command=f'"{sys.executable}" "{trainer_path}"',
+            )
+
+        self.assertEqual(
+            train_result["payload"]["run"]["training_backend"],
+            "huggingface-jobs",
+        )
+        self.assertEqual(
+            train_result["payload"]["run"]["artifact_store_uri"],
+            "https://huggingface.co/example/model",
+        )
+        self.assertEqual(
+            train_result["payload"]["checkpoint"]["artifact_uri"],
+            "https://huggingface.co/example/model",
+        )
+
     def test_promotion_denied_without_quorum(self) -> None:
         dataset_ids = self._bootstrap_and_prepare_datasets()
         checkpoint_id, evaluation_id = self._train_until_passed_eval(dataset_ids)

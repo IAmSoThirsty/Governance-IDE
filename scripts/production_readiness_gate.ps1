@@ -104,6 +104,18 @@ function Assert-ProductionEnvContract {
         throw "SOVEREIGN_TRAINING_ARTIFACT_STORE must be durable shared storage."
     }
 
+    $trainingBackend = [Environment]::GetEnvironmentVariable("SOVEREIGN_TRAINING_BACKEND")
+    if ($trainingBackend -eq "huggingface-jobs") {
+        $hubModelId = Assert-RequiredEnv -Name "SOVEREIGN_HUB_MODEL_ID"
+        if ($hubModelId -match 'REPLACE|PLACEHOLDER|CHANGE_ME') {
+            throw "SOVEREIGN_HUB_MODEL_ID looks like a placeholder."
+        }
+        $hfToken = Assert-RequiredEnv -Name "HF_TOKEN"
+        if ($hfToken -match 'REPLACE|PLACEHOLDER|CHANGE_ME|test|dev') {
+            throw "HF_TOKEN looks like a placeholder or test value."
+        }
+    }
+
     $approvers = (Assert-RequiredEnv -Name "SOVEREIGN_RELEASE_APPROVERS").Split(",") |
         ForEach-Object { $_.Trim() } |
         Where-Object { $_ }

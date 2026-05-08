@@ -57,6 +57,11 @@ until an actual dataset, base checkpoint, trainer environment, and artifact
 store have been wired and a governed checkpoint has passed shadow evaluation
 and promotion.
 
+When `SOVEREIGN_TRAINING_ARTIFACT_STORE` is configured, actual training output
+must report a durable artifact URI under that store. Local `file://` outputs are
+valid only for local actual-training development, never for production release
+readiness.
+
 ## Not Done Until
 
 - The image is published to the selected registry.

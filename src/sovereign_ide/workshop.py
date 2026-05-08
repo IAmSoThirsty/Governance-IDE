@@ -161,6 +161,8 @@ class TrainingJobRequest:
     dataset_ids: tuple[str, ...]
     dataset_paths: tuple[str, ...]
     output_dir: str
+    training_backend: str
+    artifact_store_uri: str | None
     requested_at: str
 
 
@@ -620,6 +622,14 @@ class TrainingOrchestrationCore:
                 "actual training requires --training-command or "
                 "SOVEREIGN_TRAINING_COMMAND",
             )
+        training_backend = (
+            os.getenv("SOVEREIGN_TRAINING_BACKEND", "local-command").strip()
+            or "local-command"
+        )
+        artifact_store_uri = (
+            os.getenv("SOVEREIGN_TRAINING_ARTIFACT_STORE", "").strip()
+            or None
+        )
 
         state = _load_json(
             self.training_runs_path,
@@ -639,6 +649,8 @@ class TrainingOrchestrationCore:
             dataset_ids=tuple(m.dataset_id for m in dataset_manifests),
             dataset_paths=tuple(str(path.resolve()) for path in dataset_paths),
             output_dir=str(output_dir.resolve()),
+            training_backend=training_backend,
+            artifact_store_uri=artifact_store_uri,
             requested_at=utc_now(),
         )
         request_path = request_dir / f"{run_id}.request.json"
@@ -686,6 +698,15 @@ class TrainingOrchestrationCore:
             raise RuntimeError(
                 "training output manifest checkpoint_hash must be sha256 hex",
             )
+        manifest_artifact_store = str(
+            output_manifest.get("artifact_store_uri", ""),
+        ).strip()
+        if artifact_store_uri:
+            self._validate_durable_training_artifact(
+                artifact_uri=artifact_uri,
+                artifact_store_uri=artifact_store_uri,
+                manifest_artifact_store=manifest_artifact_store,
+            )
 
         run_payload = {
             "run_id": run_id,
@@ -696,6 +717,8 @@ class TrainingOrchestrationCore:
             "execution_mode": "actual",
             "artifact_kind": "trained_checkpoint",
             "training_command": command,
+            "training_backend": training_backend,
+            "artifact_store_uri": artifact_store_uri,
             "request_path": str(request_path.resolve()),
             "output_manifest_path": str(output_manifest_path.resolve()),
             "started_at": started_at,
@@ -719,6 +742,30 @@ class TrainingOrchestrationCore:
         state["checkpoints"].append(to_primitive(checkpoint))
         _save_json(self.training_runs_path, state)
         return run_payload, checkpoint
+
+    @staticmethod
+    def _validate_durable_training_artifact(
+        *,
+        artifact_uri: str,
+        artifact_store_uri: str,
+        manifest_artifact_store: str,
+    ) -> None:
+        local_schemes = ("file://", "local://", "simulated://")
+        if artifact_uri.startswith(local_schemes):
+            raise RuntimeError(
+                "training output artifact_uri must use durable storage when "
+                "SOVEREIGN_TRAINING_ARTIFACT_STORE is configured",
+            )
+        expected = artifact_store_uri.rstrip("/")
+        actual = artifact_uri.rstrip("/")
+        if manifest_artifact_store and manifest_artifact_store != artifact_store_uri:
+            raise RuntimeError(
+                "training output manifest artifact_store_uri does not match request",
+            )
+        if actual != expected and not actual.startswith(expected + "/"):
+            raise RuntimeError(
+                "training output artifact_uri does not match configured artifact store",
+            )
 
     @staticmethod
     def _split_training_command(command: str) -> list[str]:

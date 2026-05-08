@@ -75,6 +75,7 @@ def main() -> int:
     request = json.loads(Path(args.request).read_text(encoding="utf-8"))
     output_dir = Path(request["output_dir"]).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
+    artifact_store_uri = str(request.get("artifact_store_uri") or "").strip()
 
     records = _load_records(list(request["dataset_paths"]))
     dataset = Dataset.from_list(records)
@@ -112,15 +113,25 @@ def main() -> int:
     if push_to_hub:
         trainer.push_to_hub()
 
+    if artifact_store_uri and not push_to_hub:
+        raise RuntimeError(
+            "durable artifact store requires --hub-model-id/"
+            "SOVEREIGN_HUB_MODEL_ID or a custom trainer uploader",
+        )
     artifact_uri = (
         f"https://huggingface.co/{args.hub_model_id}"
         if push_to_hub
         else output_dir.as_uri()
     )
+    if artifact_store_uri and artifact_uri.rstrip("/") != artifact_store_uri.rstrip("/"):
+        raise RuntimeError(
+            "pushed artifact URI does not match requested artifact store",
+        )
     result = {
         "status": "completed",
         "checkpoint_id": f"checkpoint_{uuid4().hex}",
         "artifact_uri": artifact_uri,
+        "artifact_store_uri": artifact_store_uri or None,
         "checkpoint_hash": _sha256_tree(output_dir),
     }
     Path(args.output).write_text(
