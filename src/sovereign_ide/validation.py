@@ -12,6 +12,7 @@ MUTATION_CLASSES = {
     "hardMutation",
     "governanceMutation",
 }
+READINESS_LEVELS = {"runtime", "production"}
 
 
 class ValidationError(ValueError):
@@ -108,6 +109,54 @@ def validate_policy_pack(policy: dict[str, Any]) -> None:
                 )
 
 
+def validate_readiness_contract(contract: dict[str, Any]) -> None:
+    _require_mapping(contract, "readiness_contract")
+    _require_string(contract, "version", "readiness_contract")
+    levels = _require_mapping(
+        contract.get("readiness_levels"),
+        "readiness_contract.readiness_levels",
+    )
+    missing_levels = READINESS_LEVELS - set(levels)
+    if missing_levels:
+        missing = ", ".join(sorted(missing_levels))
+        raise ValidationError(f"readiness contract missing levels: {missing}")
+
+    for level_name in READINESS_LEVELS:
+        level = _require_mapping(
+            levels.get(level_name),
+            f"readiness_levels.{level_name}",
+        )
+        _require_string(level, "description", f"readiness_levels.{level_name}")
+        allowed = _require_list(
+            level.get("claims_allowed"),
+            f"readiness_levels.{level_name}.claims_allowed",
+        )
+        if not allowed or not all(isinstance(item, str) and item for item in allowed):
+            raise ValidationError(
+                f"readiness_levels.{level_name}.claims_allowed must contain strings",
+            )
+        if level_name == "production":
+            evidence = _require_list(
+                level.get("required_evidence"),
+                "readiness_levels.production.required_evidence",
+            )
+            if not evidence or not all(
+                isinstance(item, str) and item for item in evidence
+            ):
+                raise ValidationError(
+                    "readiness_levels.production.required_evidence must contain strings",
+                )
+        if level_name == "runtime":
+            forbidden = _require_list(
+                level.get("claims_forbidden"),
+                "readiness_levels.runtime.claims_forbidden",
+            )
+            if not any("production" in str(item) for item in forbidden):
+                raise ValidationError(
+                    "runtime readiness must explicitly forbid production claims",
+                )
+
+
 def validate_repository_artifacts(workspace_root: str | Path) -> None:
     root = Path(workspace_root).resolve()
     for schema_path in (root / "schemas").glob("*.schema.json"):
@@ -119,6 +168,12 @@ def validate_repository_artifacts(workspace_root: str | Path) -> None:
             raw_policy.keys(),
         ):
             load_policy_pack(policy_path, workspace_root=root)
+
+    readiness_contract = root / "deployments" / "readiness_contract.json"
+    if readiness_contract.exists():
+        validate_readiness_contract(
+            json.loads(readiness_contract.read_text(encoding="utf-8")),
+        )
 
 
 def _require_mapping(value: Any, name: str) -> dict[str, Any]:

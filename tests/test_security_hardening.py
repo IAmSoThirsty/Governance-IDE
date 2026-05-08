@@ -49,6 +49,10 @@ from sovereign_ide.supply_chain import (  # noqa: E402
     PromotionTier,
     SupplyChainRegistry,
 )
+from sovereign_ide.validation import (  # noqa: E402
+    ValidationError,
+    validate_readiness_contract,
+)
 
 
 class GovernanceHardeningTests(unittest.TestCase):
@@ -578,6 +582,45 @@ class ArtifactValidationHardeningTests(unittest.TestCase):
 
             evaluation = engine.evaluate(request, context, token)
             self.assertTrue(evaluation.allowed, msg=evaluation.denial_reasons)
+
+    def test_readiness_contract_forbids_runtime_production_claims(self) -> None:
+        contract = {
+            "version": "1.0.0",
+            "readiness_levels": {
+                "runtime": {
+                    "description": "local service checks",
+                    "claims_allowed": ["runtime ready"],
+                    "claims_forbidden": ["production ready"],
+                },
+                "production": {
+                    "description": "deployment release checks",
+                    "required_evidence": ["release manifest"],
+                    "claims_allowed": ["production deployment ready"],
+                },
+            },
+        }
+
+        validate_readiness_contract(contract)
+
+    def test_readiness_contract_rejects_soft_runtime_claims(self) -> None:
+        contract = {
+            "version": "1.0.0",
+            "readiness_levels": {
+                "runtime": {
+                    "description": "local service checks",
+                    "claims_allowed": ["ready"],
+                    "claims_forbidden": ["maybe later"],
+                },
+                "production": {
+                    "description": "deployment release checks",
+                    "required_evidence": ["release manifest"],
+                    "claims_allowed": ["production deployment ready"],
+                },
+            },
+        }
+
+        with self.assertRaises(ValidationError):
+            validate_readiness_contract(contract)
 
     def test_federation_ledger_hash_chain_tamper_is_detected(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

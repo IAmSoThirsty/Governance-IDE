@@ -1,0 +1,46 @@
+{
+  "version": "1.0.0",
+  "readiness_levels": {
+    "runtime": {
+      "description": "The service can start, validate local repository artifacts, verify journals, and answer authenticated runtime endpoints.",
+      "claims_allowed": [
+        "runtime ready",
+        "service ready"
+      ],
+      "claims_forbidden": [
+        "production ready",
+        "deployment ready",
+        "model-server ready"
+      ]
+    },
+    "production": {
+      "description": "The release has passed all local gates and all external deployment prerequisites have concrete, non-placeholder values.",
+      "required_evidence": [
+        "python >= 3.11",
+        "valid repository artifacts",
+        "local quality gate",
+        "pre-production inspection",
+        "advanced integration preflight",
+        "e2e test matrix",
+        "container smoke test",
+        "durable registry image ref",
+        "immutable image digest",
+        "release manifest",
+        "injected signing key",
+        "injected service token",
+        "durable state backend",
+        "actual training command",
+        "durable training artifact store",
+        "at least two release approvers"
+      ],
+      "claims_allowed": [
+        "production deployment ready"
+      ],
+      "local_rehearsal_overrides": [
+        "-AllowLocalImage",
+        "-AllowLocalEnvFile",
+        "-AllowMissingReleaseManifest"
+      ]
+    }
+  }
+}

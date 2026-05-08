@@ -66,6 +66,8 @@ This repository implements a local-first, offline-capable governance core with:
 
 - Start local service:
   - `python -m sovereign_ide.cli serve --host 127.0.0.1 --port 8765`
+- `/ready` is runtime readiness only. It is not a production deployment
+  certification.
 - Optional bearer-token protection:
   - Set `SOVEREIGN_SERVICE_TOKEN`.
   - `/health` remains public.
@@ -91,6 +93,8 @@ This repository implements a local-first, offline-capable governance core with:
   - `./scripts/production_readiness_gate.ps1 -PythonExe C:\Path\To\Python312\python.exe`
 - Production release plan:
   - `docs/production_deployment_plan.md`
+- Canonical readiness contract:
+  - `deployments/readiness_contract.json`
 - Production environment contract:
   - `deployments/production.env.example`
 - Release manifest template:

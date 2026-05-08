@@ -3,10 +3,12 @@ param(
     [string]$PythonExe = ".venv\Scripts\python.exe",
     [string]$ImageName = $env:SOVEREIGN_IMAGE_REF,
     [string]$DockerExe = "docker",
+    [string]$ReleaseManifestPath = $env:SOVEREIGN_RELEASE_MANIFEST,
     [switch]$SkipE2E,
     [switch]$SkipContainerSmoke,
     [switch]$AllowLocalEnvFile,
-    [switch]$AllowLocalImage
+    [switch]$AllowLocalImage,
+    [switch]$AllowMissingReleaseManifest
 )
 
 Set-StrictMode -Version Latest
@@ -75,6 +77,13 @@ function Assert-ProductionEnvContract {
     $imageRef = Assert-RequiredEnv -Name "SOVEREIGN_IMAGE_REF"
     Assert-ProductionImageRef -Value $imageRef
 
+    if (-not $AllowLocalImage) {
+        $imageDigest = Assert-RequiredEnv -Name "SOVEREIGN_IMAGE_DIGEST"
+        if ($imageDigest -notmatch '^sha256:[a-fA-F0-9]{64}$') {
+            throw "SOVEREIGN_IMAGE_DIGEST must be an immutable sha256 digest."
+        }
+    }
+
     $stateBackend = Assert-RequiredEnv -Name "SOVEREIGN_STATE_BACKEND"
     if ($stateBackend -match '^(local|dev|tmp|temporary)$') {
         throw "SOVEREIGN_STATE_BACKEND must be durable for production."
@@ -103,10 +112,56 @@ function Assert-ProductionEnvContract {
     }
 }
 
+function Assert-ReleaseManifest {
+    if ($AllowMissingReleaseManifest) {
+        return
+    }
+    if ([string]::IsNullOrWhiteSpace($ReleaseManifestPath)) {
+        throw "Production readiness requires -ReleaseManifestPath or SOVEREIGN_RELEASE_MANIFEST."
+    }
+    if (-not (Test-Path -LiteralPath $ReleaseManifestPath)) {
+        throw "Release manifest not found: $ReleaseManifestPath"
+    }
+
+    $manifest = Get-Content -LiteralPath $ReleaseManifestPath -Raw |
+        ConvertFrom-Json
+    foreach ($field in @("release_id", "image_ref", "image_digest", "git_commit")) {
+        if (-not $manifest.PSObject.Properties.Name.Contains($field)) {
+            throw "Release manifest missing required field: $field"
+        }
+        if ([string]::IsNullOrWhiteSpace([string]$manifest.$field)) {
+            throw "Release manifest field is empty: $field"
+        }
+        if ([string]$manifest.$field -match 'replace-with|placeholder') {
+            throw "Release manifest field contains placeholder: $field"
+        }
+    }
+
+    $imageRef = [Environment]::GetEnvironmentVariable("SOVEREIGN_IMAGE_REF")
+    if ([string]$manifest.image_ref -ne $imageRef) {
+        throw "Release manifest image_ref does not match SOVEREIGN_IMAGE_REF."
+    }
+
+    $imageDigest = [Environment]::GetEnvironmentVariable("SOVEREIGN_IMAGE_DIGEST")
+    if ([string]$manifest.image_digest -ne $imageDigest) {
+        throw "Release manifest image_digest does not match SOVEREIGN_IMAGE_DIGEST."
+    }
+
+    $headCommit = (& git rev-parse HEAD).Trim()
+    if ($LASTEXITCODE -ne 0) {
+        throw "Unable to resolve current git commit for release manifest validation."
+    }
+    $manifestCommit = [string]$manifest.git_commit
+    if (-not $headCommit.StartsWith($manifestCommit) -and $manifestCommit -ne $headCommit) {
+        throw "Release manifest git_commit does not match the current release tree."
+    }
+}
+
 $repoRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $repoRoot
 
 Assert-ProductionEnvContract
+Assert-ReleaseManifest
 
 Invoke-Checked -FilePath "powershell" -Arguments @(
     "-NoProfile",
