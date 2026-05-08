@@ -42,6 +42,7 @@ This repository implements a local-first, offline-capable governance core with:
   - `./scripts/run_e2e_test_matrix.ps1`
   - `./scripts/preprod_inspection.ps1`
   - `./scripts/advanced_integration_preflight.ps1`
+  - `./scripts/production_readiness_gate.ps1`
 
 ## Pre-production inspection
 
@@ -84,8 +85,16 @@ This repository implements a local-first, offline-capable governance core with:
   - `docker run --rm -p 8765:8765 -v sovereign-ide-state:/app/state -e SOVEREIGN_SIGNING_KEY=... -e SOVEREIGN_SERVICE_TOKEN=... sovereign-ide-runtime`
 - The runtime image installs the package immutably, runs as the non-root
   `sovereign` user, and stores mutable journals/checkpoints under `/app/state`.
+- Smoke test a built image:
+  - `./scripts/container_smoke_test.ps1 -ImageName sovereign-ide-runtime`
 - Production gate before release:
   - `./scripts/production_readiness_gate.ps1 -PythonExe C:\Path\To\Python312\python.exe`
+- Production release plan:
+  - `docs/production_deployment_plan.md`
+- Production environment contract:
+  - `deployments/production.env.example`
+- Release manifest template:
+  - `deployments/release.manifest.example.json`
 
 ## Project-AI Sovereign Model Server Workshop
 

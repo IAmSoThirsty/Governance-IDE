@@ -1,0 +1,31 @@
+{
+  "release_id": "release-2026-05-08-001",
+  "image_ref": "registry.example.com/sovereign/sovereign-ide-runtime:0.1.0",
+  "image_digest": "sha256:replace-with-pushed-image-digest",
+  "git_commit": "replace-with-release-commit",
+  "state_backend": "persistent_volume",
+  "state_uri": "pvc://sovereign-ide-state",
+  "policy_path": "policies/baseline_policy.json",
+  "training": {
+    "mode": "actual",
+    "command": "python scripts/trainers/trl_sft_trainer.py",
+    "artifact_store": "s3://replace-with-model-artifact-bucket/checkpoints",
+    "dataset_contract": "governed workshop dataset manifests only"
+  },
+  "governance": {
+    "required_approvers": [
+      "release_authority",
+      "security_reviewer"
+    ],
+    "rollback_model": "compensation_only",
+    "audit_journal": "append_only_hash_chain"
+  },
+  "gates": {
+    "local_quality": "required",
+    "e2e_matrix": "required",
+    "preprod_inspection": "required",
+    "advanced_integration_preflight": "required",
+    "container_smoke": "required",
+    "production_env_contract": "required"
+  }
+}

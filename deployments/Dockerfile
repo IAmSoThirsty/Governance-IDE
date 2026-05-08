@@ -23,6 +23,7 @@ COPY schemas ./schemas
 COPY governance ./governance
 COPY integration ./integration
 COPY deployments ./deployments
+COPY scripts ./scripts
 
 RUN python -m pip install --no-cache-dir --upgrade pip setuptools wheel \
     && python -m pip install --no-cache-dir --no-build-isolation . \
