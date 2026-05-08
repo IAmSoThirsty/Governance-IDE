@@ -86,12 +86,17 @@ class ModelRegistryTests(unittest.TestCase):
         self.temp_dir.cleanup()
 
     def _run_cli(self, args: list[str]) -> dict:
+        code, payload = self._run_cli_with_exit(args)
+        self.assertEqual(code, 0)
+        return payload
+
+    def _run_cli_with_exit(self, args: list[str]) -> tuple[int, dict]:
         parser = build_parser()
         parsed = parser.parse_args(args)
         output = io.StringIO()
         with redirect_stdout(output):
-            self.assertEqual(parsed.func(parsed), 0)
-        return json.loads(output.getvalue())
+            exit_code = int(parsed.func(parsed))
+        return exit_code, json.loads(output.getvalue())
 
     def _register_local_model(
         self,
@@ -169,6 +174,9 @@ class ModelRegistryTests(unittest.TestCase):
                 model_id,
             ],
         )
+        self.assertTrue(ticket["allowed"])
+        self.assertEqual(ticket["reason"], "ok")
+        self.assertEqual(len(ticket["governance_decision_hash"]), 64)
         self.assertEqual(ticket["decision"]["outcome"], "approved")
         self.assertEqual(
             ticket["payload"]["status"],
@@ -195,6 +203,158 @@ class ModelRegistryTests(unittest.TestCase):
         signer = build_decision_signer(get_settings(self.root))
         valid, reason = verify_execution_ticket(execution_ticket, signer)
         self.assertTrue(valid, msg=reason)
+
+    def test_cli_execution_ticket_unknown_model_denied_with_reason(self) -> None:
+        exit_code, payload = self._run_cli_with_exit(
+            [
+                "model-execution-ticket",
+                "--workspace-root",
+                str(self.root),
+                "--actor",
+                "steward",
+                "--roles",
+                "model_steward",
+                "--tenant",
+                "tenant1",
+                "--trust-domain",
+                "domain1",
+                "--model-id",
+                "does-not-exist",
+            ],
+        )
+        self.assertEqual(exit_code, 1)
+        self.assertFalse(payload["allowed"])
+        self.assertEqual(payload["reason"], "unknown_model")
+
+    def test_cli_execution_ticket_invalid_signer_configuration_denied(self) -> None:
+        (self.root / ".env").write_text(
+            "\n".join(
+                [
+                    f"SOVEREIGN_SIGNING_KEY={'f' * 64}",
+                    "SOVEREIGN_RUNTIME_MODE=production",
+                    "SOVEREIGN_SIGNER_BACKEND=hmac-dev",
+                    "SOVEREIGN_POLICY_PATH=policies/baseline_policy.json",
+                    "SOVEREIGN_STATE_DIR=state",
+                    "SOVEREIGN_JOURNAL_BACKEND=sqlite",
+                ],
+            ),
+            encoding="utf-8",
+        )
+        get_settings.cache_clear()
+
+        exit_code, payload = self._run_cli_with_exit(
+            [
+                "model-execution-ticket",
+                "--workspace-root",
+                str(self.root),
+                "--actor",
+                "steward",
+                "--roles",
+                "model_steward",
+                "--tenant",
+                "tenant1",
+                "--trust-domain",
+                "domain1",
+                "--model-id",
+                "model-any",
+            ],
+        )
+        self.assertEqual(exit_code, 1)
+        self.assertFalse(payload["allowed"])
+        self.assertTrue(
+            payload["reason"].startswith("invalid_signer_configuration:"),
+        )
+
+    def test_cli_ticket_inspect_rejects_tampered_and_expired(self) -> None:
+        registered = self._run_cli(
+            [
+                "model-register",
+                "--workspace-root",
+                str(self.root),
+                "--actor",
+                "steward",
+                "--roles",
+                "model_steward",
+                "--tenant",
+                "tenant1",
+                "--trust-domain",
+                "domain1",
+                "--source-type",
+                "local_path",
+                "--source",
+                str(self.model_path),
+                "--license",
+                "test-license",
+                "--trust-level",
+                "reviewed",
+                "--policy-profile",
+                "default-model-policy",
+                "--provenance-ref",
+                "provenance://model.bin",
+                "--quorum-proof",
+                "model-registration-quorum",
+            ],
+        )
+        model_id = registered["payload"]["model"]["model_id"]
+
+        issued = self._run_cli(
+            [
+                "model-execution-ticket",
+                "--workspace-root",
+                str(self.root),
+                "--actor",
+                "steward",
+                "--roles",
+                "model_steward",
+                "--tenant",
+                "tenant1",
+                "--trust-domain",
+                "domain1",
+                "--model-id",
+                model_id,
+            ],
+        )
+        ticket = issued["payload"]["execution_ticket"]
+
+        tampered_ticket = dict(ticket)
+        tampered_ticket["model_id"] = "tampered"
+        tampered_ticket_path = self.root / "ticket_tampered.json"
+        tampered_ticket_path.write_text(
+            json.dumps(tampered_ticket, indent=2),
+            encoding="utf-8",
+        )
+        tampered_exit, tampered_payload = self._run_cli_with_exit(
+            [
+                "model-execution-ticket-inspect",
+                "--workspace-root",
+                str(self.root),
+                "--ticket-file",
+                str(tampered_ticket_path),
+            ],
+        )
+        self.assertEqual(tampered_exit, 1)
+        self.assertFalse(tampered_payload["allowed"])
+        self.assertEqual(tampered_payload["reason"], "signature_invalid")
+
+        valid_ticket_path = self.root / "ticket_valid.json"
+        valid_ticket_path.write_text(
+            json.dumps(ticket, indent=2),
+            encoding="utf-8",
+        )
+        expired_exit, expired_payload = self._run_cli_with_exit(
+            [
+                "model-execution-ticket-inspect",
+                "--workspace-root",
+                str(self.root),
+                "--ticket-file",
+                str(valid_ticket_path),
+                "--at-time",
+                "2999-01-01T00:00:00+00:00",
+            ],
+        )
+        self.assertEqual(expired_exit, 1)
+        self.assertFalse(expired_payload["allowed"])
+        self.assertEqual(expired_payload["reason"], "ticket_expired")
 
     def test_unreviewed_model_cannot_get_execution_ticket(self) -> None:
         settings = get_settings(self.root)

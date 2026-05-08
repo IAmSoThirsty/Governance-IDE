@@ -24,7 +24,7 @@ from .models import (
     utc_now,
 )
 from .model_registry import GovernedModelRegistry
-from .service import build_execution_ticket, serve, verify_execution_ticket
+from .service import inspect_execution_ticket, request_execution_ticket, serve
 from .supply_chain import ArtifactType, SupplyChainRegistry
 from .workshop import SovereignModelServerWorkshop
 
@@ -438,72 +438,33 @@ def cmd_models_list(args: argparse.Namespace) -> int:
 
 def cmd_model_execution_ticket(args: argparse.Namespace) -> int:
     workspace_root = Path(args.workspace_root).resolve()
-    settings = get_settings(workspace_root)
-    registry = GovernedModelRegistry(settings.model_registry_path)
-    model = registry.assert_executable(args.model_id)
-    runtime = _build_runtime(workspace_root)
     context = _governance_context(args)
-    token = _capability_token(context, "execute_model")
-    _request, evaluation, binding = runtime.evaluate_and_bind(
+    response = request_execution_ticket(
+        workspace_root,
         context=context,
-        action="execute_model",
-        resource=str(settings.model_registry_path),
-        mutation_class=MutationClass.READ,
-        capability_token=token,
+        model_id=args.model_id,
+        ticket_purpose=args.ticket_purpose,
+        ticket_ttl_seconds=args.ticket_ttl_seconds,
     )
-    mutation_binding = runtime.build_mutation_binding(
-        context=context,
-        action="execute_model",
-        resource=str(settings.model_registry_path),
-        mutation_class=MutationClass.READ,
-        capability_token=token,
-        evaluation=evaluation,
-        binding=binding,
-        resolution_policy="invariants>policyEvaluation>capabilityToken",
-        quorum_proof=None,
-    )
-    result = runtime.commit_mutation(
-        mutation_binding,
-        lambda: _issue_cli_execution_ticket(
-            runtime,
-            model,
-            args.ticket_purpose,
-            args.ticket_ttl_seconds,
-        ),
-    )
-    _print_json(
-        {
-            "evaluation": to_primitive(evaluation),
-            "decision": to_primitive(result.decision),
-            "payload": result.payload,
-        },
-    )
-    return 0 if result.applied else 1
+    _print_json(response)
+    return 0 if bool(response.get("allowed")) else 1
 
 
-def _issue_cli_execution_ticket(
-    runtime: GovernanceRuntime,
-    model: Any,
-    ticket_purpose: str,
-    ticket_ttl_seconds: int,
-) -> dict[str, Any]:
-    ticket = build_execution_ticket(
-        runtime,
-        model,
-        purpose=ticket_purpose,
-        ttl_seconds=int(ticket_ttl_seconds),
+def cmd_model_execution_ticket_inspect(args: argparse.Namespace) -> int:
+    workspace_root = Path(args.workspace_root).resolve()
+    ticket_path = Path(args.ticket_file).resolve()
+    raw = json.loads(ticket_path.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        raise ValueError("ticket file must contain a JSON object")
+
+    response = inspect_execution_ticket(
+        workspace_root,
+        ticket=raw,
+        at_time=(args.at_time or None),
+        trace_id=(args.trace_id or None),
     )
-    valid, reason = verify_execution_ticket(ticket, runtime.signer)
-    if not valid:
-        raise ValueError(f"execution ticket verification failed: {reason}")
-    return {
-        "status": "governed_execution_authorized",
-        "execution_ticket": ticket,
-        "verification": {
-            "valid": True,
-            "reason": reason,
-        },
-    }
+    _print_json(response)
+    return 0 if bool(response.get("allowed")) else 1
 
 
 def cmd_workshop_init(args: argparse.Namespace) -> int:
@@ -771,6 +732,13 @@ def build_parser() -> argparse.ArgumentParser:
     model_ticket.add_argument("--ticket-purpose", default="model_execution")
     model_ticket.add_argument("--ticket-ttl-seconds", type=int, default=900)
     model_ticket.set_defaults(func=cmd_model_execution_ticket)
+
+    model_ticket_inspect = subparsers.add_parser("model-execution-ticket-inspect")
+    model_ticket_inspect.add_argument("--workspace-root", default=str(Path.cwd()))
+    model_ticket_inspect.add_argument("--ticket-file", required=True)
+    model_ticket_inspect.add_argument("--trace-id", default="")
+    model_ticket_inspect.add_argument("--at-time", default="")
+    model_ticket_inspect.set_defaults(func=cmd_model_execution_ticket_inspect)
 
     workshop_init = subparsers.add_parser("workshop-init")
     _add_workshop_common_args(workshop_init, include_quorum=True)

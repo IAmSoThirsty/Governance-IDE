@@ -8,7 +8,7 @@ import sys
 import tempfile
 import threading
 import unittest
-from urllib import request
+from urllib import error, request
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -169,6 +169,41 @@ class ServiceApiTests(unittest.TestCase):
         with request.urlopen(req, timeout=5) as response:
             return json.loads(response.read().decode("utf-8"))
 
+    def _post_json_with_status(self, path: str, payload: dict) -> tuple[int, dict]:
+        data = json.dumps(payload).encode("utf-8")
+        req = request.Request(
+            self.base_url + path,
+            data=data,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with request.urlopen(req, timeout=5) as response:
+                return response.status, json.loads(response.read().decode("utf-8"))
+        except error.HTTPError as exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
+
+    def _inject_model_record(self, record: dict) -> None:
+        settings = get_settings(self.root)
+        state = {
+            "models": {},
+            "immutable_index": {},
+        }
+        if settings.model_registry_path.exists():
+            state = json.loads(settings.model_registry_path.read_text(encoding="utf-8"))
+            state.setdefault("models", {})
+            state.setdefault("immutable_index", {})
+
+        state["models"][record["model_id"]] = record
+        immutable_identifier = record.get("immutable_identifier")
+        if immutable_identifier:
+            state["immutable_index"][immutable_identifier] = record["model_id"]
+        settings.model_registry_path.parent.mkdir(parents=True, exist_ok=True)
+        settings.model_registry_path.write_text(
+            json.dumps(state, indent=2),
+            encoding="utf-8",
+        )
+
     def _register_reviewed_model(self) -> str:
         settings = get_settings(self.root)
         registry = GovernedModelRegistry(settings.model_registry_path)
@@ -255,6 +290,11 @@ class ServiceApiTests(unittest.TestCase):
             },
         )
 
+        self.assertTrue(response["allowed"])
+        self.assertEqual(response["reason"], "ok")
+        self.assertIsNotNone(response["governance_decision_hash"])
+        self.assertEqual(len(response["governance_decision_hash"]), 64)
+
         payload = response["payload"]
         self.assertEqual(payload["status"], "governed_execution_authorized")
         ticket = payload["execution_ticket"]
@@ -279,6 +319,316 @@ class ServiceApiTests(unittest.TestCase):
         runtime = build_runtime(self.root)
         valid, reason = verify_execution_ticket(ticket, runtime.signer)
         self.assertTrue(valid, msg=reason)
+
+    def test_execution_ticket_unknown_model_is_denied_with_clear_reason(self) -> None:
+        status, response = self._post_json_with_status(
+            "/v1/models/execution-ticket",
+            {
+                "model_id": "model_does_not_exist",
+                "context": {
+                    "trace_id": "trace_unknown_model_denial",
+                    "actor_id": "dev1",
+                    "actor_roles": ["developer"],
+                    "tenant": "tenant1",
+                    "trust_domain": "domain1",
+                    "classification": "confidential",
+                },
+            },
+        )
+        self.assertEqual(status, 403)
+        self.assertFalse(response["allowed"])
+        self.assertEqual(response["reason"], "unknown_model")
+        self.assertIsNotNone(response["governance_decision_hash"])
+
+    def test_execution_ticket_missing_policy_profile_is_denied(self) -> None:
+        self._inject_model_record(
+            {
+                "model_id": "model_missing_policy",
+                "source_type": "local_path",
+                "source": str(self.root / "model.bin"),
+                "license": "test-license",
+                "content_hash": "a" * 64,
+                "immutable_identifier": "sha256:" + ("a" * 64),
+                "metadata": {"source_mutability": "local_immutable_by_hash"},
+                "trust_level": "reviewed",
+                "policy_profile": "",
+                "provenance_ref": "provenance://model.bin",
+                "admissibility_status": "admissible",
+                "signature_status": "unsigned",
+                "registered_at": "2026-01-01T00:00:00+00:00",
+                "registry_schema_version": "1.1.0",
+                "signature": None,
+            },
+        )
+
+        status, response = self._post_json_with_status(
+            "/v1/models/execution-ticket",
+            {
+                "model_id": "model_missing_policy",
+                "context": {
+                    "trace_id": "trace_missing_policy_denial",
+                    "actor_id": "dev1",
+                    "actor_roles": ["developer"],
+                    "tenant": "tenant1",
+                    "trust_domain": "domain1",
+                    "classification": "confidential",
+                },
+            },
+        )
+        self.assertEqual(status, 403)
+        self.assertFalse(response["allowed"])
+        self.assertEqual(response["reason"], "missing_policy_profile")
+
+    def test_execution_ticket_missing_provenance_is_denied(self) -> None:
+        self._inject_model_record(
+            {
+                "model_id": "model_missing_provenance",
+                "source_type": "local_path",
+                "source": str(self.root / "model.bin"),
+                "license": "test-license",
+                "content_hash": "b" * 64,
+                "immutable_identifier": "sha256:" + ("b" * 64),
+                "metadata": {"source_mutability": "local_immutable_by_hash"},
+                "trust_level": "reviewed",
+                "policy_profile": "default-model-policy",
+                "provenance_ref": "",
+                "admissibility_status": "admissible",
+                "signature_status": "unsigned",
+                "registered_at": "2026-01-01T00:00:00+00:00",
+                "registry_schema_version": "1.1.0",
+                "signature": None,
+            },
+        )
+
+        status, response = self._post_json_with_status(
+            "/v1/models/execution-ticket",
+            {
+                "model_id": "model_missing_provenance",
+                "context": {
+                    "trace_id": "trace_missing_provenance_denial",
+                    "actor_id": "dev1",
+                    "actor_roles": ["developer"],
+                    "tenant": "tenant1",
+                    "trust_domain": "domain1",
+                    "classification": "confidential",
+                },
+            },
+        )
+        self.assertEqual(status, 403)
+        self.assertFalse(response["allowed"])
+        self.assertEqual(response["reason"], "missing_provenance")
+
+    def test_execution_ticket_insufficient_trust_is_denied(self) -> None:
+        settings = get_settings(self.root)
+        registry = GovernedModelRegistry(settings.model_registry_path)
+        record = registry.register(
+            source_type="huggingface_model_id",
+            source="org/model",
+            license="unknown",
+            content_hash="a" * 64,
+            immutable_identifier="org/model@rev",
+            metadata={},
+            trust_level="quarantine",
+            policy_profile="default-model-policy",
+            provenance_ref="hf://org/model",
+        )
+
+        status, response = self._post_json_with_status(
+            "/v1/models/execution-ticket",
+            {
+                "model_id": record.model_id,
+                "context": {
+                    "trace_id": "trace_insufficient_trust_denial",
+                    "actor_id": "dev1",
+                    "actor_roles": ["developer"],
+                    "tenant": "tenant1",
+                    "trust_domain": "domain1",
+                    "classification": "confidential",
+                },
+            },
+        )
+        self.assertEqual(status, 403)
+        self.assertFalse(response["allowed"])
+        self.assertEqual(response["reason"], "insufficient_trust_level")
+
+    def test_execution_ticket_mutable_source_without_proof_is_denied(self) -> None:
+        self._inject_model_record(
+            {
+                "model_id": "model_mutable_endpoint",
+                "source_type": "openai_compatible_endpoint",
+                "source": "https://api.example.invalid/v1",
+                "license": "service-terms",
+                "content_hash": "c" * 64,
+                "immutable_identifier": "sha256:" + ("c" * 64),
+                "metadata": {"source_mutability": "mutable_external_endpoint"},
+                "trust_level": "reviewed",
+                "policy_profile": "default-model-policy",
+                "provenance_ref": "endpoint://api.example.invalid/v1",
+                "admissibility_status": "admissible",
+                "signature_status": "unsigned",
+                "registered_at": "2026-01-01T00:00:00+00:00",
+                "registry_schema_version": "1.1.0",
+                "signature": None,
+            },
+        )
+
+        status, response = self._post_json_with_status(
+            "/v1/models/execution-ticket",
+            {
+                "model_id": "model_mutable_endpoint",
+                "context": {
+                    "trace_id": "trace_mutable_source_denial",
+                    "actor_id": "dev1",
+                    "actor_roles": ["developer"],
+                    "tenant": "tenant1",
+                    "trust_domain": "domain1",
+                    "classification": "confidential",
+                },
+            },
+        )
+        self.assertEqual(status, 403)
+        self.assertFalse(response["allowed"])
+        self.assertEqual(
+            response["reason"],
+            "mutable_source_requires_immutable_proof",
+        )
+
+    def test_execution_ticket_invalid_signer_configuration_is_denied(self) -> None:
+        get_settings.cache_clear()
+        with patch.dict(
+            os.environ,
+            {
+                "SOVEREIGN_RUNTIME_MODE": "production",
+                "SOVEREIGN_SIGNER_BACKEND": "hmac-dev",
+                "SOVEREIGN_SIGNING_KEY": "d" * 64,
+            },
+            clear=False,
+        ):
+            status, response = self._post_json_with_status(
+                "/v1/models/execution-ticket",
+                {
+                    "model_id": "model_any",
+                    "context": {
+                        "trace_id": "trace_invalid_signer_denial",
+                        "actor_id": "dev1",
+                        "actor_roles": ["developer"],
+                        "tenant": "tenant1",
+                        "trust_domain": "domain1",
+                        "classification": "confidential",
+                    },
+                },
+            )
+        get_settings.cache_clear()
+
+        self.assertEqual(status, 403)
+        self.assertFalse(response["allowed"])
+        self.assertTrue(response["reason"].startswith("invalid_signer_configuration:"))
+
+    def test_execution_ticket_success_and_denial_are_recorded_in_journal(self) -> None:
+        model_id = self._register_reviewed_model()
+        trace_id_success = "trace_ticket_success_journal"
+        success = self._post_json(
+            "/v1/models/execution-ticket",
+            {
+                "model_id": model_id,
+                "context": {
+                    "trace_id": trace_id_success,
+                    "actor_id": "dev1",
+                    "actor_roles": ["developer"],
+                    "tenant": "tenant1",
+                    "trust_domain": "domain1",
+                    "classification": "confidential",
+                },
+            },
+        )
+        self.assertTrue(success["allowed"])
+        replay_success = self._get_json(f"/v1/audit/replay?trace_id={trace_id_success}")
+        self.assertTrue(
+            any(
+                entry["record_type"] == "execution_ticket_issued"
+                for entry in replay_success["entries"]
+            ),
+        )
+
+        trace_id_denial = "trace_ticket_denial_journal"
+        status, denial = self._post_json_with_status(
+            "/v1/models/execution-ticket",
+            {
+                "model_id": "unknown_model_for_denial",
+                "context": {
+                    "trace_id": trace_id_denial,
+                    "actor_id": "dev1",
+                    "actor_roles": ["developer"],
+                    "tenant": "tenant1",
+                    "trust_domain": "domain1",
+                    "classification": "confidential",
+                },
+            },
+        )
+        self.assertEqual(status, 403)
+        self.assertFalse(denial["allowed"])
+        replay_denial = self._get_json(f"/v1/audit/replay?trace_id={trace_id_denial}")
+        self.assertTrue(
+            any(
+                entry["record_type"] == "execution_ticket_denied"
+                for entry in replay_denial["entries"]
+            ),
+        )
+
+    def test_execution_ticket_inspect_rejects_tampered_and_expired_tickets(self) -> None:
+        model_id = self._register_reviewed_model()
+        issued = self._post_json(
+            "/v1/models/execution-ticket",
+            {
+                "model_id": model_id,
+                "ticket_purpose": "inspect_test",
+                "ticket_ttl_seconds": 120,
+                "context": {
+                    "trace_id": "trace_ticket_inspect_issue",
+                    "actor_id": "dev1",
+                    "actor_roles": ["developer"],
+                    "tenant": "tenant1",
+                    "trust_domain": "domain1",
+                    "classification": "confidential",
+                },
+            },
+        )
+        ticket = issued["payload"]["execution_ticket"]
+
+        tampered = dict(ticket)
+        tampered["model_id"] = "tampered"
+        status_tampered, response_tampered = self._post_json_with_status(
+            "/v1/models/execution-ticket/inspect",
+            {
+                "trace_id": "trace_ticket_inspect_tampered",
+                "ticket": tampered,
+            },
+        )
+        self.assertEqual(status_tampered, 403)
+        self.assertFalse(response_tampered["allowed"])
+        self.assertEqual(response_tampered["reason"], "signature_invalid")
+
+        runtime = build_runtime(self.root)
+        settings = get_settings(self.root)
+        model = GovernedModelRegistry(settings.model_registry_path).get(model_id)
+        expired_ticket = build_execution_ticket(
+            runtime,
+            model,
+            purpose="inspect_test",
+            ttl_seconds=60,
+            issued_at="2026-01-01T00:00:00+00:00",
+        )
+        status_expired, response_expired = self._post_json_with_status(
+            "/v1/models/execution-ticket/inspect",
+            {
+                "trace_id": "trace_ticket_inspect_expired",
+                "ticket": expired_ticket,
+                "at_time": "2026-01-01T00:02:00+00:00",
+            },
+        )
+        self.assertEqual(status_expired, 403)
+        self.assertFalse(response_expired["allowed"])
+        self.assertEqual(response_expired["reason"], "ticket_expired")
 
     def test_service_token_protects_ready_and_api(self) -> None:
         with patch.dict(os.environ, {"SOVEREIGN_SERVICE_TOKEN": "secret"}):
@@ -383,7 +733,9 @@ class ExecutionTicketSignerPolicyTests(unittest.TestCase):
 
     @unittest.skipUnless(HAS_CRYPTOGRAPHY, "cryptography not installed")
     def test_valid_ed25519_ticket_signing_and_verification(self) -> None:
-        private_key = ed25519.Ed25519PrivateKey.generate()
+        private_key = ed25519.Ed25519PrivateKey.from_private_bytes(
+            bytes.fromhex("11" * 32),
+        )
         private_key_pem = private_key.private_bytes(
             encoding=serialization.Encoding.PEM,
             format=serialization.PrivateFormat.PKCS8,

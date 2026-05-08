@@ -33,6 +33,11 @@ from .validation import load_policy_pack, validate_repository_artifacts
 
 DEFAULT_EXECUTION_TICKET_TTL_SECONDS = 900
 MAX_EXECUTION_TICKET_TTL_SECONDS = 3600
+MUTABLE_SOURCES_REQUIRING_IMMUTABLE_PROOF = {
+    "huggingface_model_id",
+    "openai_compatible_endpoint",
+    "external_gateway",
+}
 
 
 def build_runtime(workspace_root: str | Path) -> GovernanceRuntime:
@@ -179,6 +184,441 @@ def verify_execution_ticket(
     return True, "ok"
 
 
+def _extract_denial_reason(reason: str) -> str:
+    marker = "execution_ticket_denied:"
+    if marker in reason:
+        return reason.split(marker, 1)[1]
+    mutation_prefix = "mutation_execution_failed:"
+    if reason.startswith(mutation_prefix):
+        return reason[len(mutation_prefix):]
+    return reason
+
+
+def _is_mutable_source_without_proof(model: GovernedModelRecord) -> bool:
+    metadata = dict(model.metadata or {})
+    if model.source_type == "huggingface_model_id":
+        revision = str(metadata.get("revision", "")).strip()
+        source_has_revision = "@" in model.source and bool(
+            model.source.rsplit("@", 1)[1].strip(),
+        )
+        return not revision and not source_has_revision
+
+    if model.source_type in {
+        "openai_compatible_endpoint",
+        "external_gateway",
+    }:
+        immutable_endpoint_proof = str(
+            metadata.get("immutable_endpoint_proof", ""),
+        ).strip()
+        return not immutable_endpoint_proof
+
+    return False
+
+
+def _require_model_for_execution_ticket(
+    registry: GovernedModelRegistry,
+    model_id: str,
+) -> GovernedModelRecord:
+    try:
+        model = registry.get(model_id)
+    except KeyError as exc:
+        raise ValueError("execution_ticket_denied:unknown_model") from exc
+
+    if not str(model.policy_profile).strip():
+        raise ValueError("execution_ticket_denied:missing_policy_profile")
+    if not str(model.provenance_ref).strip():
+        raise ValueError("execution_ticket_denied:missing_provenance")
+    if model.trust_level not in {"reviewed", "trusted"}:
+        raise ValueError("execution_ticket_denied:insufficient_trust_level")
+    if model.admissibility_status != "admissible":
+        raise ValueError("execution_ticket_denied:model_not_admissible")
+    if (
+        model.source_type in MUTABLE_SOURCES_REQUIRING_IMMUTABLE_PROOF
+        and _is_mutable_source_without_proof(model)
+    ):
+        raise ValueError(
+            "execution_ticket_denied:mutable_source_requires_immutable_proof",
+        )
+    return model
+
+
+def _ticket_response(
+    *,
+    allowed: bool,
+    reason: str,
+    model_id: str | None,
+    policy_profile: str | None,
+    issued_at: str | None,
+    expires_at: str | None,
+    signer_type: str | None,
+    signature: dict[str, Any] | None,
+    ticket_id: str | None,
+    governance_decision_hash: str | None,
+    evaluation: dict[str, Any] | None,
+    decision: dict[str, Any] | None,
+    payload: dict[str, Any] | None,
+    status_code: int,
+) -> dict[str, Any]:
+    return {
+        "allowed": allowed,
+        "reason": reason,
+        "ticket_id": ticket_id,
+        "model_id": model_id,
+        "policy_profile": policy_profile,
+        "issued_at": issued_at,
+        "expires_at": expires_at,
+        "signer_type": signer_type,
+        "signature": signature,
+        "governance_decision_hash": governance_decision_hash,
+        "evaluation": evaluation,
+        "decision": decision,
+        "payload": payload,
+        "status_code": status_code,
+    }
+
+
+def request_execution_ticket(
+    workspace_root: str | Path,
+    *,
+    context: GovernanceContext,
+    model_id: str,
+    ticket_purpose: str,
+    ticket_ttl_seconds: int,
+) -> dict[str, Any]:
+    root = Path(workspace_root).resolve()
+    settings = get_settings(root)
+    journal = build_journal(settings)
+
+    try:
+        runtime = build_runtime(root)
+    except Exception as exc:  # noqa: BLE001
+        reason = f"invalid_signer_configuration:{exc}"
+        journal.append(
+            "execution_ticket_denied",
+            context.trace_id,
+            {
+                "model_id": model_id,
+                "reason": reason,
+            },
+        )
+        return _ticket_response(
+            allowed=False,
+            reason=reason,
+            model_id=model_id,
+            policy_profile=None,
+            issued_at=None,
+            expires_at=None,
+            signer_type=None,
+            signature=None,
+            ticket_id=None,
+            governance_decision_hash=None,
+            evaluation=None,
+            decision=None,
+            payload=None,
+            status_code=403,
+        )
+
+    token = CapabilityToken(
+        token_id=new_id("token"),
+        subject=context.actor_id,
+        scopes=("execute_model",),
+        trust_domain=context.trust_domain,
+        issued_at=utc_now(),
+        expires_at=(
+            datetime.now(timezone.utc) + timedelta(minutes=15)
+        ).isoformat(),
+        revoked=False,
+    )
+
+    _request, evaluation, binding = runtime.evaluate_and_bind(
+        context=context,
+        action="execute_model",
+        resource=str(settings.model_registry_path),
+        mutation_class=MutationClass.READ,
+        capability_token=token,
+    )
+    mutation_binding = runtime.build_mutation_binding(
+        context=context,
+        action="execute_model",
+        resource=str(settings.model_registry_path),
+        mutation_class=MutationClass.READ,
+        capability_token=token,
+        evaluation=evaluation,
+        binding=binding,
+        resolution_policy="invariants>policyEvaluation>capabilityToken",
+    )
+
+    def _mutate() -> dict[str, Any]:
+        registry = GovernedModelRegistry(settings.model_registry_path)
+        model = _require_model_for_execution_ticket(registry, model_id)
+        ticket = build_execution_ticket(
+            runtime,
+            model,
+            purpose=ticket_purpose,
+            ttl_seconds=ticket_ttl_seconds,
+        )
+        valid, verification_reason = verify_execution_ticket(
+            ticket,
+            runtime.signer,
+        )
+        if not valid:
+            raise ValueError(
+                f"execution_ticket_denied:{verification_reason}",
+            )
+        return {
+            "status": "governed_execution_authorized",
+            "execution_ticket": ticket,
+            "verification": {
+                "valid": True,
+                "reason": verification_reason,
+            },
+        }
+
+    result = runtime.commit_mutation(mutation_binding, _mutate)
+    decision_hash = sha256_hex(result.decision)
+
+    if not result.applied:
+        denial_reason = _extract_denial_reason(result.decision.reason)
+        runtime.journal.append(
+            "execution_ticket_denied",
+            context.trace_id,
+            {
+                "model_id": model_id,
+                "reason": denial_reason,
+                "decision_id": result.decision.decision_id,
+                "governance_decision_hash": decision_hash,
+            },
+        )
+        return _ticket_response(
+            allowed=False,
+            reason=denial_reason,
+            model_id=model_id,
+            policy_profile=None,
+            issued_at=None,
+            expires_at=None,
+            signer_type=type(runtime.signer).__name__,
+            signature=None,
+            ticket_id=None,
+            governance_decision_hash=decision_hash,
+            evaluation=to_primitive(evaluation),
+            decision=to_primitive(result.decision),
+            payload=None,
+            status_code=403,
+        )
+
+    payload = dict(result.payload or {})
+    ticket = dict(payload.get("execution_ticket") or {})
+    runtime.journal.append(
+        "execution_ticket_issued",
+        context.trace_id,
+        {
+            "model_id": model_id,
+            "ticket_id": ticket.get("ticket_id"),
+            "decision_id": result.decision.decision_id,
+            "governance_decision_hash": decision_hash,
+        },
+    )
+    return _ticket_response(
+        allowed=True,
+        reason="ok",
+        model_id=str(ticket.get("model_id") or model_id),
+        policy_profile=str(ticket.get("policy_profile") or ""),
+        issued_at=str(ticket.get("issued_at") or ""),
+        expires_at=str(ticket.get("expires_at") or ""),
+        signer_type=str(ticket.get("signer_type") or type(runtime.signer).__name__),
+        signature=(
+            dict(ticket.get("signature"))
+            if isinstance(ticket.get("signature"), dict)
+            else None
+        ),
+        ticket_id=str(ticket.get("ticket_id") or ""),
+        governance_decision_hash=decision_hash,
+        evaluation=to_primitive(evaluation),
+        decision=to_primitive(result.decision),
+        payload=payload,
+        status_code=200,
+    )
+
+
+def inspect_execution_ticket(
+    workspace_root: str | Path,
+    *,
+    ticket: dict[str, Any],
+    at_time: str | None = None,
+    trace_id: str | None = None,
+) -> dict[str, Any]:
+    root = Path(workspace_root).resolve()
+    settings = get_settings(root)
+    journal = build_journal(settings)
+    effective_trace_id = trace_id or str(ticket.get("ticket_id") or new_id("trace"))
+
+    try:
+        runtime = build_runtime(root)
+    except Exception as exc:  # noqa: BLE001
+        reason = f"invalid_signer_configuration:{exc}"
+        journal.append(
+            "execution_ticket_denied",
+            effective_trace_id,
+            {
+                "model_id": ticket.get("model_id"),
+                "reason": reason,
+            },
+        )
+        return _ticket_response(
+            allowed=False,
+            reason=reason,
+            model_id=str(ticket.get("model_id") or ""),
+            policy_profile=None,
+            issued_at=None,
+            expires_at=None,
+            signer_type=None,
+            signature=None,
+            ticket_id=str(ticket.get("ticket_id") or ""),
+            governance_decision_hash=None,
+            evaluation=None,
+            decision=None,
+            payload=None,
+            status_code=403,
+        )
+
+    valid, reason = verify_execution_ticket(
+        ticket,
+        runtime.signer,
+        at_time=at_time,
+    )
+    if not valid:
+        runtime.journal.append(
+            "execution_ticket_denied",
+            effective_trace_id,
+            {
+                "model_id": ticket.get("model_id"),
+                "reason": reason,
+                "ticket_id": ticket.get("ticket_id"),
+            },
+        )
+        return _ticket_response(
+            allowed=False,
+            reason=reason,
+            model_id=str(ticket.get("model_id") or ""),
+            policy_profile=str(ticket.get("policy_profile") or ""),
+            issued_at=str(ticket.get("issued_at") or ""),
+            expires_at=str(ticket.get("expires_at") or ""),
+            signer_type=str(ticket.get("signer_type") or ""),
+            signature=(
+                dict(ticket.get("signature"))
+                if isinstance(ticket.get("signature"), dict)
+                else None
+            ),
+            ticket_id=str(ticket.get("ticket_id") or ""),
+            governance_decision_hash=None,
+            evaluation=None,
+            decision=None,
+            payload=None,
+            status_code=403,
+        )
+
+    model_id = str(ticket.get("model_id") or "")
+    registry = GovernedModelRegistry(settings.model_registry_path)
+    try:
+        model = _require_model_for_execution_ticket(registry, model_id)
+    except ValueError as exc:
+        denial_reason = _extract_denial_reason(str(exc))
+        runtime.journal.append(
+            "execution_ticket_denied",
+            effective_trace_id,
+            {
+                "model_id": model_id,
+                "reason": denial_reason,
+                "ticket_id": ticket.get("ticket_id"),
+            },
+        )
+        return _ticket_response(
+            allowed=False,
+            reason=denial_reason,
+            model_id=model_id,
+            policy_profile=str(ticket.get("policy_profile") or ""),
+            issued_at=str(ticket.get("issued_at") or ""),
+            expires_at=str(ticket.get("expires_at") or ""),
+            signer_type=str(ticket.get("signer_type") or ""),
+            signature=(
+                dict(ticket.get("signature"))
+                if isinstance(ticket.get("signature"), dict)
+                else None
+            ),
+            ticket_id=str(ticket.get("ticket_id") or ""),
+            governance_decision_hash=None,
+            evaluation=None,
+            decision=None,
+            payload=None,
+            status_code=403,
+        )
+
+    if str(ticket.get("registry_entry_hash") or "") != sha256_hex(to_primitive(model)):
+        denial_reason = "registry_entry_hash_mismatch"
+        runtime.journal.append(
+            "execution_ticket_denied",
+            effective_trace_id,
+            {
+                "model_id": model_id,
+                "reason": denial_reason,
+                "ticket_id": ticket.get("ticket_id"),
+            },
+        )
+        return _ticket_response(
+            allowed=False,
+            reason=denial_reason,
+            model_id=model_id,
+            policy_profile=str(ticket.get("policy_profile") or ""),
+            issued_at=str(ticket.get("issued_at") or ""),
+            expires_at=str(ticket.get("expires_at") or ""),
+            signer_type=str(ticket.get("signer_type") or ""),
+            signature=(
+                dict(ticket.get("signature"))
+                if isinstance(ticket.get("signature"), dict)
+                else None
+            ),
+            ticket_id=str(ticket.get("ticket_id") or ""),
+            governance_decision_hash=None,
+            evaluation=None,
+            decision=None,
+            payload=None,
+            status_code=403,
+        )
+
+    runtime.journal.append(
+        "execution_ticket_verified",
+        effective_trace_id,
+        {
+            "model_id": model_id,
+            "ticket_id": ticket.get("ticket_id"),
+            "reason": "ok",
+        },
+    )
+    return _ticket_response(
+        allowed=True,
+        reason="ok",
+        model_id=model_id,
+        policy_profile=str(ticket.get("policy_profile") or model.policy_profile),
+        issued_at=str(ticket.get("issued_at") or ""),
+        expires_at=str(ticket.get("expires_at") or ""),
+        signer_type=str(ticket.get("signer_type") or type(runtime.signer).__name__),
+        signature=(
+            dict(ticket.get("signature"))
+            if isinstance(ticket.get("signature"), dict)
+            else None
+        ),
+        ticket_id=str(ticket.get("ticket_id") or ""),
+        governance_decision_hash=None,
+        evaluation=None,
+        decision=None,
+        payload={
+            "status": "governed_execution_ticket_valid",
+            "execution_ticket": ticket,
+        },
+        status_code=200,
+    )
+
+
 def readiness_report(workspace_root: str | Path) -> dict[str, Any]:
     settings = get_settings(Path(workspace_root).resolve())
     checks: list[dict[str, str]] = []
@@ -309,6 +749,9 @@ def make_handler(workspace_root: str | Path) -> type[BaseHTTPRequestHandler]:
                 if parsed.path == "/v1/models/execution-ticket":
                     self._handle_model_execution_ticket()
                     return
+                if parsed.path == "/v1/models/execution-ticket/inspect":
+                    self._handle_model_execution_ticket_inspect()
+                    return
                 self._send_error(404, "not found")
             except Exception as exc:  # noqa: BLE001
                 self._send_error(500, str(exc))
@@ -368,19 +811,12 @@ def make_handler(workspace_root: str | Path) -> type[BaseHTTPRequestHandler]:
             ticket_purpose = str(
                 body.get("ticket_purpose") or "model_execution",
             ).strip()
-            if not ticket_purpose:
-                raise ValueError("ticket_purpose must be provided")
             ticket_ttl_seconds = int(
                 body.get(
                     "ticket_ttl_seconds",
                     DEFAULT_EXECUTION_TICKET_TTL_SECONDS,
                 ),
             )
-            settings = get_settings(root)
-            model = GovernedModelRegistry(
-                settings.model_registry_path,
-            ).assert_executable(model_id)
-            runtime = build_runtime(root)
             context_raw = self._require_mapping(body.get("context"), "context")
             context = GovernanceContext(
                 trace_id=str(context_raw.get("trace_id") or new_id("trace")),
@@ -394,79 +830,33 @@ def make_handler(workspace_root: str | Path) -> type[BaseHTTPRequestHandler]:
                     context_raw.get("policy_pack_version", "1.0.0"),
                 ),
             )
-            token = CapabilityToken(
-                token_id=new_id("token"),
-                subject=context.actor_id,
-                scopes=("execute_model",),
-                trust_domain=context.trust_domain,
-                issued_at=utc_now(),
-                expires_at=(
-                    datetime.now(timezone.utc) + timedelta(minutes=15)
-                ).isoformat(),
-                revoked=False,
-            )
-            _request, evaluation, binding = runtime.evaluate_and_bind(
+            response = request_execution_ticket(
+                root,
                 context=context,
-                action="execute_model",
-                resource=str(settings.model_registry_path),
-                mutation_class=MutationClass.READ,
-                capability_token=token,
+                model_id=model_id,
+                ticket_purpose=ticket_purpose,
+                ticket_ttl_seconds=ticket_ttl_seconds,
             )
-            mutation_binding = runtime.build_mutation_binding(
-                context=context,
-                action="execute_model",
-                resource=str(settings.model_registry_path),
-                mutation_class=MutationClass.READ,
-                capability_token=token,
-                evaluation=evaluation,
-                binding=binding,
-                resolution_policy="invariants>policyEvaluation>capabilityToken",
-            )
-            result = runtime.commit_mutation(
-                mutation_binding,
-                lambda: self._issue_execution_ticket_payload(
-                    runtime,
-                    model,
-                    ticket_purpose,
-                    ticket_ttl_seconds,
-                ),
-            )
-            self._send_json(
-                {
-                    "evaluation": to_primitive(evaluation),
-                    "decision": to_primitive(result.decision),
-                    "payload": result.payload,
-                },
-                status=200 if result.applied else 403,
-            )
+            self._send_json(response, status=int(response["status_code"]))
 
-        @staticmethod
-        def _issue_execution_ticket_payload(
-            runtime: GovernanceRuntime,
-            model: GovernedModelRecord,
-            ticket_purpose: str,
-            ticket_ttl_seconds: int,
-        ) -> dict[str, Any]:
-            ticket = build_execution_ticket(
-                runtime,
-                model,
-                purpose=ticket_purpose,
-                ttl_seconds=ticket_ttl_seconds,
+        def _handle_model_execution_ticket_inspect(self) -> None:
+            body = self._read_json()
+            ticket = self._require_mapping(body.get("ticket"), "ticket")
+            at_time_raw = body.get("at_time")
+            at_time = str(at_time_raw).strip() if at_time_raw is not None else None
+            trace_id_raw = body.get("trace_id")
+            trace_id = (
+                str(trace_id_raw).strip()
+                if trace_id_raw is not None
+                else None
             )
-            valid, reason = verify_execution_ticket(ticket, runtime.signer)
-            if not valid:
-                raise ValueError(
-                    "execution ticket verification failed: "
-                    f"{reason}",
-                )
-            return {
-                "status": "governed_execution_authorized",
-                "execution_ticket": ticket,
-                "verification": {
-                    "valid": True,
-                    "reason": reason,
-                },
-            }
+            response = inspect_execution_ticket(
+                root,
+                ticket=ticket,
+                at_time=at_time,
+                trace_id=trace_id,
+            )
+            self._send_json(response, status=int(response["status_code"]))
 
         def _authorized(self) -> bool:
             token = os.getenv("SOVEREIGN_SERVICE_TOKEN", "").strip()
