@@ -79,9 +79,11 @@ This repository implements a local-first, offline-capable governance core with:
 ## Container deployment
 
 - Build:
-  - `docker build -f deployments/Dockerfile -t sovereign-ide-runtime .`
+  - `docker build -f deployments/Dockerfile --build-arg VCS_REF=$(git rev-parse --short HEAD) -t sovereign-ide-runtime .`
 - Run:
-  - `docker run --rm -p 8765:8765 -e SOVEREIGN_SIGNING_KEY=... -e SOVEREIGN_SERVICE_TOKEN=... sovereign-ide-runtime`
+  - `docker run --rm -p 8765:8765 -v sovereign-ide-state:/app/state -e SOVEREIGN_SIGNING_KEY=... -e SOVEREIGN_SERVICE_TOKEN=... sovereign-ide-runtime`
+- The runtime image installs the package immutably, runs as the non-root
+  `sovereign` user, and stores mutable journals/checkpoints under `/app/state`.
 - Production gate before release:
   - `./scripts/production_readiness_gate.ps1 -PythonExe C:\Path\To\Python312\python.exe`
 
