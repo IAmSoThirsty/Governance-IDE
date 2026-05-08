@@ -52,6 +52,26 @@
       "quorum_required": true,
       "risk_score": 90
     },
+    "register_model": {
+      "required_mutation_class": "governanceMutation",
+      "allowed_roles": [
+        "model_steward",
+        "release_authority"
+      ],
+      "quorum_required": true,
+      "risk_score": 90
+    },
+    "execute_model": {
+      "required_mutation_class": "read",
+      "allowed_roles": [
+        "developer",
+        "reviewer",
+        "model_steward",
+        "release_authority"
+      ],
+      "quorum_required": false,
+      "risk_score": 25
+    },
     "import_airgap_bundle": {
       "required_mutation_class": "governanceMutation",
       "allowed_roles": [

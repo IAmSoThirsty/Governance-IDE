@@ -1,0 +1,91 @@
+name: Sovereign IDE CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  quality:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+
+    env:
+      PYTHONPATH: src
+      SOVEREIGN_SIGNING_KEY: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+      SOVEREIGN_SERVICE_TOKEN: ci-service-token-0123456789
+      SOVEREIGN_IMAGE_REF: sovereign-ide-runtime:ci
+      SOVEREIGN_STATE_BACKEND: persistent_volume
+      SOVEREIGN_STATE_URI: pvc://sovereign-ide-state-ci
+      SOVEREIGN_TRAINING_COMMAND: python scripts/trainers/trl_sft_trainer.py
+      SOVEREIGN_TRAINING_ARTIFACT_STORE: https://artifact-store.example/checkpoints
+      SOVEREIGN_RELEASE_APPROVERS: release_authority,security_reviewer
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install package and test runner
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          python -m pip install .
+          python -m pip install pytest
+
+      - name: Run pytest
+        shell: pwsh
+        run: python -m pytest
+
+      - name: Local quality gate
+        shell: pwsh
+        run: powershell -ExecutionPolicy Bypass -File scripts/local_quality_gate.ps1 -PythonExe python
+
+      - name: Pre-production inspection
+        shell: pwsh
+        run: powershell -ExecutionPolicy Bypass -File scripts/preprod_inspection.ps1 -PythonExe python
+
+      - name: Advanced integration preflight
+        shell: pwsh
+        run: powershell -ExecutionPolicy Bypass -File scripts/advanced_integration_preflight.ps1 -PythonExe python
+
+      - name: Build Docker image if Docker is available
+        shell: pwsh
+        run: |
+          $dockerAvailable = $false
+          try {
+            docker version
+            if ($LASTEXITCODE -eq 0) { $dockerAvailable = $true }
+          } catch {
+            $dockerAvailable = $false
+          }
+          if ($dockerAvailable) {
+            docker build -t sovereign-ide-runtime:ci -f deployments/Dockerfile .
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            "SOVEREIGN_CI_DOCKER_AVAILABLE=true" >> $env:GITHUB_ENV
+          } else {
+            "SOVEREIGN_CI_DOCKER_AVAILABLE=false" >> $env:GITHUB_ENV
+          }
+
+      - name: Production readiness gate rehearsal
+        shell: pwsh
+        run: |
+          $args = @(
+            "-ExecutionPolicy", "Bypass",
+            "-File", "scripts/production_readiness_gate.ps1",
+            "-PythonExe", "python",
+            "-ImageName", "sovereign-ide-runtime:ci",
+            "-SkipE2E",
+            "-AllowLocalImage",
+            "-AllowMissingReleaseManifest"
+          )
+          if ($env:SOVEREIGN_CI_DOCKER_AVAILABLE -ne "true") {
+            $args += "-SkipContainerSmoke"
+          }
+          powershell @args

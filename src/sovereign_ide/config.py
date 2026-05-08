@@ -14,11 +14,15 @@ MIN_SIGNING_KEY_LENGTH = 64
 class Settings:
     workspace_root: Path
     signing_key: str
+    signer_backend: str
     policy_path: Path
     state_dir: Path
     journal_path: Path
+    journal_backend: str
+    sqlite_journal_path: Path
     provenance_path: Path
     supply_chain_path: Path
+    model_registry_path: Path
 
 
 def _load_dotenv(dotenv_path: Path) -> None:
@@ -70,13 +74,20 @@ def get_settings(workspace_root: str | Path | None = None) -> Settings:
     signing_key = _require_signing_key()
     policy_path = (root / policy_path_env).resolve()
     state_dir = (root / os.getenv("SOVEREIGN_STATE_DIR", "state")).resolve()
+    journal_backend = os.getenv("SOVEREIGN_JOURNAL_BACKEND", "sqlite").strip()
+    if journal_backend not in {"sqlite", "file"}:
+        raise ValueError("SOVEREIGN_JOURNAL_BACKEND must be sqlite or file")
 
     return Settings(
         workspace_root=root,
         signing_key=signing_key,
+        signer_backend=os.getenv("SOVEREIGN_SIGNER_BACKEND", "hmac-dev").strip(),
         policy_path=policy_path,
         state_dir=state_dir,
         journal_path=state_dir / "governance_journal.jsonl",
+        journal_backend=journal_backend,
+        sqlite_journal_path=state_dir / "governance_events.sqlite3",
         provenance_path=state_dir / "provenance_graph.json",
         supply_chain_path=state_dir / "supply_chain_memory.json",
+        model_registry_path=state_dir / "model_registry.json",
     )

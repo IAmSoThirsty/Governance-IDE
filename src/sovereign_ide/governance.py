@@ -2,13 +2,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from pathlib import Path
 import hmac
 import hashlib
 import json
 import os
-from typing import Any, Callable
+import sqlite3
+from typing import Any, Callable, Protocol
 
 from .models import (
     AuditEvent,
@@ -50,6 +51,20 @@ class PolicyViolation(GovernanceError):
 
 class JournalIntegrityError(GovernanceError):
     """Raised when append-only journal integrity verification fails."""
+
+
+class DecisionSigner(Protocol):
+    key_id: str
+
+    def sign(self, payload: dict[str, Any]) -> SignatureEnvelope:
+        ...
+
+    def verify(
+        self,
+        payload: dict[str, Any],
+        envelope: SignatureEnvelope,
+    ) -> bool:
+        ...
 
 
 @dataclass(frozen=True)
@@ -240,7 +255,7 @@ class HashChainJournal:
 
 
 class HMACDecisionSigner:
-    """Deterministic signer for immutable decision records."""
+    """Development/local signer only; replace with Ed25519/KMS/HSM for production."""
 
     def __init__(self, key_material: str, key_id: str = "local-hmac") -> None:
         self._key = key_material.encode("utf-8")
@@ -269,6 +284,187 @@ class HMACDecisionSigner:
             hashlib.sha256,
         ).hexdigest()
         return hmac.compare_digest(expected, envelope.signature)
+
+
+class Ed25519DecisionSigner:
+    """Production signer scaffold backed by cryptography when configured."""
+
+    def __init__(
+        self,
+        private_key_pem: str,
+        key_id: str = "ed25519",
+    ) -> None:
+        try:
+            from cryptography.hazmat.primitives import serialization
+        except ImportError as exc:  # pragma: no cover - optional dependency
+            raise RuntimeError(
+                "Ed25519 signing requires the cryptography package",
+            ) from exc
+        self._serialization = serialization
+        self._private_key = serialization.load_pem_private_key(
+            private_key_pem.encode("utf-8"),
+            password=None,
+        )
+        self._public_key = self._private_key.public_key()
+        self.key_id = key_id
+
+    def sign(self, payload: dict[str, Any]) -> SignatureEnvelope:
+        signature = self._private_key.sign(
+            canonical_json(payload).encode("utf-8"),
+        ).hex()
+        return SignatureEnvelope(
+            algorithm="Ed25519",
+            key_id=self.key_id,
+            signature=signature,
+        )
+
+    def verify(
+        self,
+        payload: dict[str, Any],
+        envelope: SignatureEnvelope,
+    ) -> bool:
+        try:
+            self._public_key.verify(
+                bytes.fromhex(envelope.signature),
+                canonical_json(payload).encode("utf-8"),
+            )
+            return True
+        except Exception:  # noqa: BLE001
+            return False
+
+
+class SQLiteEventJournal(HashChainJournal):
+    """SQLite-backed append-only hash-chain journal for local runtime mode."""
+
+    def __init__(self, journal_path: str | Path) -> None:
+        self.path = Path(journal_path)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._entry_count = 0
+        self._last_hash: str | None = None
+        self._init_db()
+        self._hydrate_state()
+
+    def _init_db(self) -> None:
+        with closing(sqlite3.connect(self.path)) as db:
+            db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS events (
+                    sequence INTEGER PRIMARY KEY,
+                    entry_id TEXT NOT NULL UNIQUE,
+                    timestamp TEXT NOT NULL,
+                    record_type TEXT NOT NULL,
+                    trace_id TEXT NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    previous_hash TEXT,
+                    entry_hash TEXT NOT NULL UNIQUE
+                )
+                """,
+            )
+            db.commit()
+
+    def _load_raw_entries(self) -> list[dict[str, Any]]:
+        with closing(sqlite3.connect(self.path)) as db:
+            rows = db.execute(
+                """
+                SELECT entry_id, sequence, timestamp, record_type, trace_id,
+                       payload_json, previous_hash, entry_hash
+                FROM events
+                ORDER BY sequence ASC
+                """,
+            ).fetchall()
+        return [
+            {
+                "entry_id": row[0],
+                "sequence": row[1],
+                "timestamp": row[2],
+                "record_type": row[3],
+                "trace_id": row[4],
+                "payload": json.loads(row[5]),
+                "previous_hash": row[6],
+                "entry_hash": row[7],
+            }
+            for row in rows
+        ]
+
+    def _load_and_verify_entries(self) -> list[dict[str, Any]]:
+        entries: list[dict[str, Any]] = []
+        previous_hash: str | None = None
+        expected_sequence = 1
+        for line_number, entry in enumerate(self._load_raw_entries(), start=1):
+            self._verify_entry(
+                entry,
+                expected_sequence=expected_sequence,
+                previous_hash=previous_hash,
+                line_number=line_number,
+            )
+            entries.append(entry)
+            previous_hash = str(entry["entry_hash"])
+            expected_sequence += 1
+        return entries
+
+    def append(
+        self,
+        record_type: str,
+        trace_id: str,
+        payload: Any,
+    ) -> dict[str, Any]:
+        with self._journal_lock():
+            self._hydrate_state()
+            entry = {
+                "entry_id": new_id("journal"),
+                "sequence": self._entry_count + 1,
+                "timestamp": utc_now(),
+                "record_type": record_type,
+                "trace_id": trace_id,
+                "payload": to_primitive(payload),
+                "previous_hash": self._last_hash,
+            }
+            entry_hash = hashlib.sha256(
+                canonical_json(entry).encode("utf-8"),
+            ).hexdigest()
+            entry["entry_hash"] = entry_hash
+            with closing(sqlite3.connect(self.path)) as db:
+                db.execute(
+                    """
+                    INSERT INTO events (
+                        sequence, entry_id, timestamp, record_type, trace_id,
+                        payload_json, previous_hash, entry_hash
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        entry["sequence"],
+                        entry["entry_id"],
+                        entry["timestamp"],
+                        entry["record_type"],
+                        entry["trace_id"],
+                        canonical_json(entry["payload"]),
+                        entry["previous_hash"],
+                        entry["entry_hash"],
+                    ),
+                )
+                db.commit()
+            self._entry_count += 1
+            self._last_hash = entry_hash
+            return entry
+
+
+def build_journal(settings: Any, *, path: str | Path | None = None) -> HashChainJournal:
+    if settings.journal_backend == "file":
+        return HashChainJournal(path or settings.journal_path)
+    return SQLiteEventJournal(path or settings.sqlite_journal_path)
+
+
+def build_decision_signer(settings: Any) -> DecisionSigner:
+    if settings.signer_backend == "hmac-dev":
+        return HMACDecisionSigner(settings.signing_key)
+    if settings.signer_backend == "ed25519":
+        key = os.getenv("SOVEREIGN_ED25519_PRIVATE_KEY_PEM", "").strip()
+        if not key:
+            raise ValueError(
+                "SOVEREIGN_ED25519_PRIVATE_KEY_PEM is required for ed25519 signing",
+            )
+        return Ed25519DecisionSigner(key, key_id=os.getenv("SOVEREIGN_SIGNER_KEY_ID", "ed25519"))
+    raise ValueError("SOVEREIGN_SIGNER_BACKEND must be hmac-dev or ed25519")
 
 
 class PolicyEngine:
@@ -389,7 +585,7 @@ class GovernanceRuntime:
         self,
         policy_engine: PolicyEngine,
         journal: HashChainJournal,
-        signer: HMACDecisionSigner,
+        signer: DecisionSigner,
     ) -> None:
         self.policy_engine = policy_engine
         self.journal = journal

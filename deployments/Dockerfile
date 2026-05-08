@@ -20,10 +20,8 @@ COPY pyproject.toml README.md ./
 COPY src ./src
 COPY policies ./policies
 COPY schemas ./schemas
-COPY governance ./governance
-COPY integration ./integration
-COPY deployments ./deployments
-COPY scripts ./scripts
+COPY deployments/app_catalog.json deployments/readiness_contract.json ./deployments/
+COPY scripts/trainers ./scripts/trainers
 
 RUN python -m pip install --no-cache-dir --upgrade pip setuptools wheel \
     && python -m pip install --no-cache-dir --no-build-isolation . \

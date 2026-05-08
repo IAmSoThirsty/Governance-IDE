@@ -15,11 +15,13 @@ from typing import Any, Callable
 
 from .config import Settings, get_settings
 from .governance import (
+    DecisionSigner,
     GovernanceRuntime,
     HashChainJournal,
-    HMACDecisionSigner,
     PolicyEngine,
     PolicyViolation,
+    build_decision_signer,
+    build_journal,
 )
 from .models import (
     CapabilityToken,
@@ -30,6 +32,7 @@ from .models import (
     to_primitive,
     utc_now,
 )
+from .model_registry import GovernedModelRegistry
 from .provenance import ProvenanceGraph
 
 
@@ -366,7 +369,7 @@ class ConstitutionalDatasetFoundry:
         self,
         dataset_index_path: Path,
         datasets_dir: Path,
-        signer: HMACDecisionSigner,
+        signer: DecisionSigner,
     ) -> None:
         self.dataset_index_path = dataset_index_path
         self.datasets_dir = datasets_dir
@@ -659,6 +662,7 @@ class TrainingOrchestrationCore:
 
         started_at = utc_now()
         command_parts = self._split_training_command(command)
+        child_env = self._training_subprocess_env()
         completed = subprocess.run(
             command_parts
             + [
@@ -668,6 +672,7 @@ class TrainingOrchestrationCore:
                 str(output_manifest_path.resolve()),
             ],
             cwd=self.workspace_root,
+            env=child_env,
             capture_output=True,
             text=True,
             check=False,
@@ -776,6 +781,14 @@ class TrainingOrchestrationCore:
         if not parts:
             raise ValueError("training command is empty")
         return parts
+
+    @staticmethod
+    def _training_subprocess_env() -> dict[str, str]:
+        env = dict(os.environ)
+        if platform.system().lower() == "windows":
+            env.setdefault("SystemRoot", os.getenv("SystemRoot", r"C:\Windows"))
+            env.setdefault("WINDIR", os.getenv("WINDIR", r"C:\Windows"))
+        return env
 
 
 class ShadowEvaluationPlane:
@@ -1149,7 +1162,7 @@ class PromotionDeploymentChamber:
     def __init__(
         self,
         promotions_path: Path,
-        signer: HMACDecisionSigner,
+        signer: DecisionSigner,
     ) -> None:
         self.promotions_path = promotions_path
         self.signer = signer
@@ -1338,9 +1351,14 @@ class SovereignModelServerWorkshop:
         )
         self._ensure_policy_file()
 
-        self.signer = HMACDecisionSigner(self.settings.signing_key)
-        self.journal = HashChainJournal(
-            self.paths.state_dir / "workshop_journal.jsonl",
+        self.signer = build_decision_signer(self.settings)
+        self.journal = build_journal(
+            self.settings,
+            path=(
+                self.paths.state_dir / "workshop_journal.jsonl"
+                if self.settings.journal_backend == "file"
+                else self.paths.state_dir / "workshop_events.sqlite3"
+            ),
         )
         self.runtime = GovernanceRuntime(
             policy_engine=PolicyEngine.from_path(
@@ -1779,10 +1797,34 @@ class SovereignModelServerWorkshop:
                     "artifact_uri": checkpoint.artifact_uri,
                 },
             )
+            governed_model = None
+            if checkpoint.execution_mode == "actual":
+                governed_model = GovernedModelRegistry(
+                    self.settings.model_registry_path,
+                ).register(
+                    source_type="fine_tuned_checkpoint",
+                    source=checkpoint.artifact_uri,
+                    license="derived-from-training-corpus",
+                    content_hash=checkpoint.checkpoint_hash,
+                    immutable_identifier=checkpoint.checkpoint_id,
+                    metadata={
+                        "run_id": run_payload["run_id"],
+                        "base_checkpoint": base_checkpoint,
+                        "dataset_ids": list(dataset_ids),
+                        "model_family": model_family,
+                    },
+                    trust_level="reviewed",
+                    policy_profile="workshop-fine-tuned-model",
+                    provenance_ref=f"training-run://{run_payload['run_id']}",
+                    signer=self.signer,
+                )
 
             return {
                 "run": run_payload,
                 "checkpoint": to_primitive(checkpoint),
+                "governed_model": (
+                    to_primitive(governed_model) if governed_model else None
+                ),
             }
 
         return self._commit_governed_operation(

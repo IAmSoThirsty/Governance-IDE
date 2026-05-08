@@ -67,6 +67,32 @@ must report a durable artifact URI under that store. Local `file://` outputs are
 valid only for local actual-training development, never for production release
 readiness.
 
+## Model Intake And Execution
+
+Every model must be registered before use. Intake records source type, source,
+license, content hash or immutable identifier, metadata, trust level, policy
+profile, and provenance reference. Supported sources are local model paths,
+Hugging Face model IDs, OpenAI-compatible endpoints, Ollama/local endpoints,
+and external gateways.
+
+Execution is not an inference bypass. A caller must obtain a governed execution
+ticket first; the ticket writes policy evaluation, decision, and audit entries.
+Unreviewed or untrusted models cannot receive execution tickets.
+
+Fine-tuned checkpoints from actual training are registered as new governed
+models and signed through the signer abstraction.
+
+## Signing And Storage
+
+`hmac-dev` is the local development signer only. It must not be represented as
+production-grade signing. Production deployments should use the signer
+abstraction with Ed25519, KMS, or HSM-backed signing.
+
+Local mode uses the SQLite append-only event journal by default. The file
+journal remains a development fallback through `SOVEREIGN_JOURNAL_BACKEND=file`.
+Enterprise/server deployment should move the same append-only event-store
+contract to Postgres, but Postgres is not required for local mode.
+
 ## Not Done Until
 
 - The image is published to the selected registry.

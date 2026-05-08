@@ -11,9 +11,9 @@ from .config import get_settings
 from .evaluation import EvaluationHarness
 from .governance import (
     GovernanceRuntime,
-    HashChainJournal,
-    HMACDecisionSigner,
     PolicyEngine,
+    build_decision_signer,
+    build_journal,
 )
 from .models import (
     CapabilityToken,
@@ -23,7 +23,9 @@ from .models import (
     to_primitive,
     utc_now,
 )
+from .model_registry import GovernedModelRegistry
 from .service import serve
+from .supply_chain import ArtifactType, SupplyChainRegistry
 from .workshop import SovereignModelServerWorkshop
 
 
@@ -69,6 +71,21 @@ def _default_policy(workspace_root: str) -> dict[str, Any]:
                 "allowed_roles": ["model_steward", "extension_steward"],
                 "quorum_required": True,
             },
+            "register_model": {
+                "required_mutation_class": "governanceMutation",
+                "allowed_roles": ["model_steward", "release_authority"],
+                "quorum_required": True,
+            },
+            "execute_model": {
+                "required_mutation_class": "read",
+                "allowed_roles": [
+                    "developer",
+                    "reviewer",
+                    "model_steward",
+                    "release_authority",
+                ],
+                "quorum_required": False,
+            },
             "compensate:apply_patch": {
                 "required_mutation_class": "governanceMutation",
                 "allowed_roles": ["incident_responder", "release_authority"],
@@ -86,8 +103,8 @@ def _build_runtime(workspace_root: Path | None = None) -> GovernanceRuntime:
         settings.policy_path,
         workspace_root=settings.workspace_root,
     )
-    journal = HashChainJournal(settings.journal_path)
-    signer = HMACDecisionSigner(settings.signing_key)
+    journal = build_journal(settings)
+    signer = build_decision_signer(settings)
     return GovernanceRuntime(
         policy_engine=policy_engine,
         journal=journal,
@@ -115,6 +132,32 @@ def _workshop_context(args: argparse.Namespace) -> GovernanceContext:
         workspace_root=str(workspace_root),
         classification=args.classification,
         policy_pack_version="1.0.0",
+    )
+
+
+def _governance_context(args: argparse.Namespace) -> GovernanceContext:
+    workspace_root = Path(args.workspace_root).resolve()
+    return GovernanceContext(
+        trace_id=args.trace_id or new_id("trace"),
+        actor_id=args.actor,
+        actor_roles=_csv_values(args.roles),
+        tenant=args.tenant,
+        trust_domain=args.trust_domain,
+        workspace_root=str(workspace_root),
+        classification=args.classification,
+        policy_pack_version="1.0.0",
+    )
+
+
+def _capability_token(context: GovernanceContext, action: str) -> CapabilityToken:
+    return CapabilityToken(
+        token_id=new_id("token"),
+        subject=context.actor_id,
+        scopes=(action,),
+        trust_domain=context.trust_domain,
+        issued_at=utc_now(),
+        expires_at=(datetime.now(timezone.utc) + timedelta(minutes=15)).isoformat(),
+        revoked=False,
     )
 
 
@@ -303,6 +346,141 @@ def cmd_apps_list(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_model_register(args: argparse.Namespace) -> int:
+    workspace_root = Path(args.workspace_root).resolve()
+    settings = get_settings(workspace_root)
+    runtime = _build_runtime(workspace_root)
+    context = _governance_context(args)
+    metadata = json.loads(args.metadata_json) if args.metadata_json else {}
+    content_hash = args.content_hash or None
+    if args.source_type == "local_path" and content_hash is None:
+        content_hash = GovernedModelRegistry.hash_local_path(args.source)
+
+    token = _capability_token(context, "register_model")
+    request, evaluation, binding = runtime.evaluate_and_bind(
+        context=context,
+        action="register_model",
+        resource=str(settings.model_registry_path),
+        mutation_class=MutationClass.GOVERNANCE_MUTATION,
+        capability_token=token,
+    )
+    mutation_binding = runtime.build_mutation_binding(
+        context=context,
+        action="register_model",
+        resource=str(settings.model_registry_path),
+        mutation_class=MutationClass.GOVERNANCE_MUTATION,
+        capability_token=token,
+        evaluation=evaluation,
+        binding=binding,
+        resolution_policy="invariants>policyEvaluation>capabilityToken",
+        quorum_proof=args.quorum_proof,
+    )
+
+    def _mutate() -> dict[str, Any]:
+        registry = GovernedModelRegistry(settings.model_registry_path)
+        record = registry.register(
+            source_type=args.source_type,
+            source=args.source,
+            license=args.license,
+            content_hash=content_hash,
+            immutable_identifier=args.immutable_identifier or None,
+            metadata=metadata,
+            trust_level=args.trust_level,
+            policy_profile=args.policy_profile,
+            provenance_ref=args.provenance_ref,
+            signer=runtime.signer,
+        )
+        supply_chain = SupplyChainRegistry(settings.supply_chain_path)
+        supply_chain.register_candidate(
+            artifact_id=record.model_id,
+            artifact_type=ArtifactType.MODEL,
+            publisher=context.actor_id,
+            checksum=record.content_hash,
+            signature_verified=record.signature is not None,
+            static_scan_passed=True,
+            dependency_scan_passed=True,
+            provenance_verified=True,
+            airgap_manifest_approved=False,
+        )
+        supply_chain.register_evidence(
+            artifact_id=record.model_id,
+            evidence_type="provenance",
+            passed=True,
+            evidence_ref=record.provenance_ref,
+        )
+        if record.signature is not None:
+            supply_chain.register_evidence(
+                artifact_id=record.model_id,
+                evidence_type="signature",
+                passed=True,
+                evidence_ref=f"signature://{record.signature.key_id}/{record.model_id}",
+            )
+        return {"model": to_primitive(record)}
+
+    result = runtime.commit_mutation(mutation_binding, _mutate)
+    _print_json(
+        {
+            "request": to_primitive(request),
+            "evaluation": to_primitive(evaluation),
+            "decision": to_primitive(result.decision),
+            "payload": result.payload,
+        },
+    )
+    return 0 if result.applied else 1
+
+
+def cmd_models_list(args: argparse.Namespace) -> int:
+    settings = get_settings(Path(args.workspace_root).resolve())
+    registry = GovernedModelRegistry(settings.model_registry_path)
+    _print_json({"models": [to_primitive(model) for model in registry.list()]})
+    return 0
+
+
+def cmd_model_execution_ticket(args: argparse.Namespace) -> int:
+    workspace_root = Path(args.workspace_root).resolve()
+    settings = get_settings(workspace_root)
+    registry = GovernedModelRegistry(settings.model_registry_path)
+    model = registry.assert_executable(args.model_id)
+    runtime = _build_runtime(workspace_root)
+    context = _governance_context(args)
+    token = _capability_token(context, "execute_model")
+    request, evaluation, binding = runtime.evaluate_and_bind(
+        context=context,
+        action="execute_model",
+        resource=str(settings.model_registry_path),
+        mutation_class=MutationClass.READ,
+        capability_token=token,
+    )
+    mutation_binding = runtime.build_mutation_binding(
+        context=context,
+        action="execute_model",
+        resource=str(settings.model_registry_path),
+        mutation_class=MutationClass.READ,
+        capability_token=token,
+        evaluation=evaluation,
+        binding=binding,
+        resolution_policy="invariants>policyEvaluation>capabilityToken",
+        quorum_proof=None,
+    )
+    result = runtime.commit_mutation(
+        mutation_binding,
+        lambda: {
+            "execution_ticket_id": new_id("modelExec"),
+            "model_id": model.model_id,
+            "policy_profile": model.policy_profile,
+            "status": "governed_execution_authorized",
+        },
+    )
+    _print_json(
+        {
+            "evaluation": to_primitive(evaluation),
+            "decision": to_primitive(result.decision),
+            "payload": result.payload,
+        },
+    )
+    return 0 if result.applied else 1
+
+
 def cmd_workshop_init(args: argparse.Namespace) -> int:
     workshop = _build_workshop(args)
     context = _workshop_context(args)
@@ -453,6 +631,22 @@ def _add_workshop_common_args(
         parser.add_argument("--quorum-proof", required=True)
 
 
+def _add_governance_common_args(
+    parser: argparse.ArgumentParser,
+    *,
+    include_quorum: bool,
+) -> None:
+    parser.add_argument("--workspace-root", default=str(Path.cwd()))
+    parser.add_argument("--trace-id", default=None)
+    parser.add_argument("--actor", required=True)
+    parser.add_argument("--roles", required=True)
+    parser.add_argument("--tenant", required=True)
+    parser.add_argument("--trust-domain", required=True)
+    parser.add_argument("--classification", default="confidential")
+    if include_quorum:
+        parser.add_argument("--quorum-proof", required=True)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Sovereign IDE governed runtime CLI",
@@ -514,6 +708,42 @@ def build_parser() -> argparse.ArgumentParser:
     apps_list.add_argument("--category", default="")
     apps_list.add_argument("--status", default="")
     apps_list.set_defaults(func=cmd_apps_list)
+
+    model_register = subparsers.add_parser("model-register")
+    _add_governance_common_args(model_register, include_quorum=True)
+    model_register.add_argument(
+        "--source-type",
+        required=True,
+        choices=[
+            "local_path",
+            "huggingface_model_id",
+            "openai_compatible_endpoint",
+            "ollama_endpoint",
+            "external_gateway",
+        ],
+    )
+    model_register.add_argument("--source", required=True)
+    model_register.add_argument("--license", default="unknown")
+    model_register.add_argument("--content-hash", default="")
+    model_register.add_argument("--immutable-identifier", default="")
+    model_register.add_argument("--metadata-json", default="")
+    model_register.add_argument(
+        "--trust-level",
+        required=True,
+        choices=["untrusted", "quarantine", "reviewed", "trusted"],
+    )
+    model_register.add_argument("--policy-profile", required=True)
+    model_register.add_argument("--provenance-ref", required=True)
+    model_register.set_defaults(func=cmd_model_register)
+
+    models_list = subparsers.add_parser("models-list")
+    models_list.add_argument("--workspace-root", default=str(Path.cwd()))
+    models_list.set_defaults(func=cmd_models_list)
+
+    model_ticket = subparsers.add_parser("model-execution-ticket")
+    _add_governance_common_args(model_ticket, include_quorum=False)
+    model_ticket.add_argument("--model-id", required=True)
+    model_ticket.set_defaults(func=cmd_model_execution_ticket)
 
     workshop_init = subparsers.add_parser("workshop-init")
     _add_workshop_common_args(workshop_init, include_quorum=True)

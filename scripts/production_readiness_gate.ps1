@@ -74,6 +74,20 @@ function Assert-ProductionEnvContract {
         throw "SOVEREIGN_SERVICE_TOKEN looks like a placeholder or test value."
     }
 
+    $signerBackend = [Environment]::GetEnvironmentVariable("SOVEREIGN_SIGNER_BACKEND")
+    if ([string]::IsNullOrWhiteSpace($signerBackend)) {
+        $signerBackend = "hmac-dev"
+    }
+    if (-not $AllowLocalImage -and $signerBackend -eq "hmac-dev") {
+        throw "hmac-dev signer is local/dev only and cannot pass production readiness."
+    }
+    if ($signerBackend -eq "ed25519") {
+        $ed25519Key = Assert-RequiredEnv -Name "SOVEREIGN_ED25519_PRIVATE_KEY_PEM"
+        if ($ed25519Key -match 'REPLACE|PLACEHOLDER|CHANGE_ME') {
+            throw "SOVEREIGN_ED25519_PRIVATE_KEY_PEM looks like a placeholder."
+        }
+    }
+
     $imageRef = Assert-RequiredEnv -Name "SOVEREIGN_IMAGE_REF"
     Assert-ProductionImageRef -Value $imageRef
 

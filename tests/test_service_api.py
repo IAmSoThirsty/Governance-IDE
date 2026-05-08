@@ -195,6 +195,10 @@ class ServiceApiTests(unittest.TestCase):
         self.assertEqual(filtered["app_count"], 1)
         self.assertEqual(filtered["apps"][0]["id"], "workshop-model-training")
 
+    def test_models_endpoint_lists_registered_models(self) -> None:
+        models = self._get_json("/v1/models")
+        self.assertEqual(models["models"], [])
+
     def test_service_token_protects_ready_and_api(self) -> None:
         with patch.dict(os.environ, {"SOVEREIGN_SERVICE_TOKEN": "secret"}):
             health = self._get_json("/health")

@@ -46,7 +46,7 @@
         },
         {
           "type": "api",
-          "ref": "/health,/ready,/v1/apps,/v1/policy,/v1/audit/replay,/v1/policy/evaluate"
+          "ref": "/health,/ready,/v1/apps,/v1/models,/v1/policy,/v1/audit/replay,/v1/policy/evaluate,/v1/models/execution-ticket"
         }
       ],
       "requirements": [
@@ -104,6 +104,38 @@
         "federation",
         "ledger",
         "integrity"
+      ]
+    },
+    {
+      "id": "governed-model-intake",
+      "display_name": "Governed Model Intake",
+      "category": "modeling",
+      "status": "enabled",
+      "description": "Model intake registry for local paths, Hugging Face IDs, OpenAI-compatible endpoints, Ollama endpoints, and external gateways.",
+      "surfaces": [
+        {
+          "type": "cli",
+          "ref": "model-register,models-list,model-execution-ticket"
+        },
+        {
+          "type": "api",
+          "ref": "/v1/models,/v1/models/execution-ticket"
+        }
+      ],
+      "requirements": [
+        "policy profile",
+        "provenance reference",
+        "trust level",
+        "source hash or immutable identifier"
+      ],
+      "governance_actions": [
+        "register_model",
+        "execute_model"
+      ],
+      "tags": [
+        "model-intake",
+        "execution",
+        "provenance"
       ]
     },
     {

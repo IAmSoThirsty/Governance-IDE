@@ -285,6 +285,11 @@ class WorkshopServerTests(unittest.TestCase):
             train_result["payload"]["checkpoint"]["execution_mode"],
             "actual",
         )
+        self.assertIsNotNone(train_result["payload"]["governed_model"])
+        self.assertEqual(
+            train_result["payload"]["governed_model"]["source_type"],
+            "fine_tuned_checkpoint",
+        )
 
     def test_actual_training_rejects_local_artifact_when_store_configured(self) -> None:
         dataset_ids = self._bootstrap_and_prepare_datasets()

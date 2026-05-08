@@ -22,6 +22,7 @@ This repository implements a local-first, offline-capable governance core with:
 - `governance/` — enforcement mappings, event taxonomy, failure matrix
 - `airgap/` — transfer manifest examples
 - `tests/` — invariants and regression tests
+- `workbench/electron/` — custom Electron workbench shell
 
 ## Quick start
 
@@ -76,9 +77,11 @@ This repository implements a local-first, offline-capable governance core with:
   - `GET /health`
   - `GET /ready`
   - `GET /v1/apps`
+  - `GET /v1/models`
   - `GET /v1/policy`
   - `GET /v1/audit/replay?trace_id=...`
   - `POST /v1/policy/evaluate`
+  - `POST /v1/models/execution-ticket`
 
 ## IDE app catalog
 
@@ -89,6 +92,32 @@ This repository implements a local-first, offline-capable governance core with:
   - `python -m sovereign_ide.cli apps-list --status requires_configuration`
 - Catalog source:
   - `deployments/app_catalog.json`
+
+## Electron custom workbench
+
+- Workbench scaffold:
+  - `workbench/electron/`
+- The workbench is governance-native: model intake, fine-tuning, policy,
+  audit, quorum approval, evidence, and runtime state are first-class panels.
+- It calls the runtime service API and must not bake secrets into the desktop
+  bundle.
+
+## Governed model intake
+
+- Register a model before use:
+  - `python -m sovereign_ide.cli model-register --source-type local_path --source <path> --trust-level reviewed --policy-profile default-model-policy --provenance-ref <ref> --actor <id> --roles model_steward --tenant <tenant> --trust-domain <domain> --quorum-proof <proof>`
+- Supported source types:
+  - `local_path`
+  - `huggingface_model_id`
+  - `openai_compatible_endpoint`
+  - `ollama_endpoint`
+  - `external_gateway`
+- List registered governed models:
+  - `python -m sovereign_ide.cli models-list`
+- Authorize model execution through governance before a caller invokes it:
+  - `python -m sovereign_ide.cli model-execution-ticket --model-id <id> --actor <id> --roles model_steward --tenant <tenant> --trust-domain <domain>`
+- HMAC signatures are for dev/local integrity only. Production signing must use
+  an Ed25519/KMS/HSM backend through the signer abstraction.
 
 ## Container deployment
 

@@ -12,10 +12,10 @@ from .app_catalog import filter_app_catalog, load_app_catalog
 from .config import get_settings
 from .governance import (
     GovernanceRuntime,
-    HashChainJournal,
-    HMACDecisionSigner,
     JournalIntegrityError,
     PolicyEngine,
+    build_decision_signer,
+    build_journal,
 )
 from .models import (
     CapabilityToken,
@@ -25,6 +25,7 @@ from .models import (
     to_primitive,
     utc_now,
 )
+from .model_registry import GovernedModelRegistry
 from .validation import load_policy_pack, validate_repository_artifacts
 
 
@@ -36,8 +37,8 @@ def build_runtime(workspace_root: str | Path) -> GovernanceRuntime:
             settings.policy_path,
             workspace_root=settings.workspace_root,
         ),
-        journal=HashChainJournal(settings.journal_path),
-        signer=HMACDecisionSigner(settings.signing_key),
+        journal=build_journal(settings),
+        signer=build_decision_signer(settings),
     )
 
 
@@ -65,7 +66,7 @@ def readiness_report(workspace_root: str | Path) -> dict[str, Any]:
         add("repository_artifacts", "fail", str(exc))
 
     try:
-        HashChainJournal(settings.journal_path).read_all()
+        build_journal(settings).read_all()
         add("journal_integrity", "pass", "hash chain verified")
     except JournalIntegrityError as exc:
         add("journal_integrity", "fail", str(exc))
@@ -130,6 +131,17 @@ def make_handler(workspace_root: str | Path) -> type[BaseHTTPRequestHandler]:
                         ),
                     )
                     return
+                if parsed.path == "/v1/models":
+                    settings = get_settings(root)
+                    registry = GovernedModelRegistry(settings.model_registry_path)
+                    self._send_json(
+                        {
+                            "models": [
+                                to_primitive(model) for model in registry.list()
+                            ],
+                        },
+                    )
+                    return
                 if parsed.path == "/v1/audit/replay":
                     query = parse_qs(parsed.query)
                     trace_id = query.get("trace_id", [""])[0]
@@ -156,6 +168,9 @@ def make_handler(workspace_root: str | Path) -> type[BaseHTTPRequestHandler]:
                 parsed = urlparse(self.path)
                 if parsed.path == "/v1/policy/evaluate":
                     self._handle_policy_evaluate()
+                    return
+                if parsed.path == "/v1/models/execution-ticket":
+                    self._handle_model_execution_ticket()
                     return
                 self._send_error(404, "not found")
             except Exception as exc:  # noqa: BLE001
@@ -208,6 +223,73 @@ def make_handler(workspace_root: str | Path) -> type[BaseHTTPRequestHandler]:
                     "evaluation": to_primitive(evaluation),
                     "binding": to_primitive(binding),
                 },
+            )
+
+        def _handle_model_execution_ticket(self) -> None:
+            body = self._read_json()
+            model_id = str(body["model_id"])
+            settings = get_settings(root)
+            model = GovernedModelRegistry(
+                settings.model_registry_path,
+            ).assert_executable(model_id)
+            runtime = build_runtime(root)
+            context_raw = self._require_mapping(body.get("context"), "context")
+            context = GovernanceContext(
+                trace_id=str(context_raw.get("trace_id") or new_id("trace")),
+                actor_id=str(context_raw["actor_id"]),
+                actor_roles=tuple(context_raw["actor_roles"]),
+                tenant=str(context_raw["tenant"]),
+                trust_domain=str(context_raw["trust_domain"]),
+                workspace_root=str(context_raw.get("workspace_root") or root),
+                classification=str(context_raw["classification"]),
+                policy_pack_version=str(
+                    context_raw.get("policy_pack_version", "1.0.0"),
+                ),
+            )
+            token = CapabilityToken(
+                token_id=new_id("token"),
+                subject=context.actor_id,
+                scopes=("execute_model",),
+                trust_domain=context.trust_domain,
+                issued_at=utc_now(),
+                expires_at=(
+                    datetime.now(timezone.utc) + timedelta(minutes=15)
+                ).isoformat(),
+                revoked=False,
+            )
+            request, evaluation, binding = runtime.evaluate_and_bind(
+                context=context,
+                action="execute_model",
+                resource=str(settings.model_registry_path),
+                mutation_class=MutationClass.READ,
+                capability_token=token,
+            )
+            mutation_binding = runtime.build_mutation_binding(
+                context=context,
+                action="execute_model",
+                resource=str(settings.model_registry_path),
+                mutation_class=MutationClass.READ,
+                capability_token=token,
+                evaluation=evaluation,
+                binding=binding,
+                resolution_policy="invariants>policyEvaluation>capabilityToken",
+            )
+            result = runtime.commit_mutation(
+                mutation_binding,
+                lambda: {
+                    "execution_ticket_id": new_id("modelExec"),
+                    "model_id": model.model_id,
+                    "policy_profile": model.policy_profile,
+                    "status": "governed_execution_authorized",
+                },
+            )
+            self._send_json(
+                {
+                    "evaluation": to_primitive(evaluation),
+                    "decision": to_primitive(result.decision),
+                    "payload": result.payload,
+                },
+                status=200 if result.applied else 403,
             )
 
         def _authorized(self) -> bool:
