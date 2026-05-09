@@ -14,6 +14,7 @@ from .governance import (
     GovernanceRuntime,
     JournalIntegrityError,
     PolicyEngine,
+    PolicyViolation,
     build_decision_signer,
     build_journal,
 )
@@ -29,6 +30,7 @@ from .models import (
 )
 from .model_registry import GovernedModelRecord, GovernedModelRegistry
 from .validation import load_policy_pack, validate_repository_artifacts
+from .workshop import SovereignModelServerWorkshop
 
 
 DEFAULT_EXECUTION_TICKET_TTL_SECONDS = 900
@@ -752,6 +754,12 @@ def make_handler(workspace_root: str | Path) -> type[BaseHTTPRequestHandler]:
                 if parsed.path == "/v1/models/execution-ticket/inspect":
                     self._handle_model_execution_ticket_inspect()
                     return
+                if parsed.path == "/v1/workshop/training/preflight":
+                    self._handle_workshop_training_preflight()
+                    return
+                if parsed.path == "/v1/workshop/training/run":
+                    self._handle_workshop_training_run()
+                    return
                 self._send_error(404, "not found")
             except Exception as exc:  # noqa: BLE001
                 self._send_error(500, str(exc))
@@ -857,6 +865,167 @@ def make_handler(workspace_root: str | Path) -> type[BaseHTTPRequestHandler]:
                 trace_id=trace_id,
             )
             self._send_json(response, status=int(response["status_code"]))
+
+        def _handle_workshop_training_preflight(self) -> None:
+            body = self._read_json()
+            workshop = SovereignModelServerWorkshop(workspace_root=root)
+            context_raw = self._require_mapping(body.get("context"), "context")
+            context = GovernanceContext(
+                trace_id=str(context_raw.get("trace_id") or new_id("trace")),
+                actor_id=str(context_raw["actor_id"]),
+                actor_roles=tuple(context_raw["actor_roles"]),
+                tenant=str(context_raw["tenant"]),
+                trust_domain=str(context_raw["trust_domain"]),
+                workspace_root=str(context_raw.get("workspace_root") or root),
+                classification=str(context_raw["classification"]),
+                policy_pack_version=str(
+                    context_raw.get("policy_pack_version", "1.0.0"),
+                ),
+            )
+
+            response = workshop.preflight_training_run(
+                context=context,
+                model_family=str(body.get("model_family") or ""),
+                base_checkpoint=self._optional_str(body.get("base_checkpoint")),
+                dataset_ids=self._dataset_ids(body.get("dataset_ids")),
+                execution_mode=str(body.get("execution_mode") or "actual"),
+                simulation_smoke_test=bool(body.get("simulation_smoke_test", False)),
+                training_command=self._optional_str(body.get("training_command")),
+                training_backend=self._optional_str(body.get("training_backend")),
+                artifact_store_uri=self._optional_str(body.get("artifact_store_uri")),
+                base_model_id=self._optional_str(body.get("base_model_id")),
+                base_model_execution_ticket=(
+                    self._require_mapping(
+                        body.get("base_model_execution_ticket"),
+                        "base_model_execution_ticket",
+                    )
+                    if body.get("base_model_execution_ticket") is not None
+                    else None
+                ),
+                base_model_admissibility_decision_id=self._optional_str(
+                    body.get("base_model_admissibility_decision_id"),
+                ),
+                dataset_ref=self._optional_str(body.get("dataset_ref")),
+                dataset_provenance=self._optional_str(body.get("dataset_provenance")),
+                dataset_source_type=self._optional_str(body.get("dataset_source_type")),
+                dataset_license=self._optional_str(body.get("dataset_license")),
+                dataset_hash=self._optional_str(body.get("dataset_hash")),
+                dataset_immutable_ref=self._optional_str(body.get("dataset_immutable_ref")),
+                dataset_immutable_proof=self._optional_str(body.get("dataset_immutable_proof")),
+                policy_profile=self._optional_str(body.get("policy_profile")),
+                trust_level=str(body.get("trust_level") or "reviewed"),
+            )
+            status = 200 if bool(response.get("allowed")) else 403
+            self._send_json(response, status=status)
+
+        def _handle_workshop_training_run(self) -> None:
+            body = self._read_json()
+            workshop = SovereignModelServerWorkshop(workspace_root=root)
+            context_raw = self._require_mapping(body.get("context"), "context")
+            context = GovernanceContext(
+                trace_id=str(context_raw.get("trace_id") or new_id("trace")),
+                actor_id=str(context_raw["actor_id"]),
+                actor_roles=tuple(context_raw["actor_roles"]),
+                tenant=str(context_raw["tenant"]),
+                trust_domain=str(context_raw["trust_domain"]),
+                workspace_root=str(context_raw.get("workspace_root") or root),
+                classification=str(context_raw["classification"]),
+                policy_pack_version=str(
+                    context_raw.get("policy_pack_version", "1.0.0"),
+                ),
+            )
+
+            try:
+                result = workshop.start_training_run(
+                    context=context,
+                    model_family=str(body.get("model_family") or ""),
+                    base_checkpoint=self._optional_str(body.get("base_checkpoint")),
+                    dataset_ids=self._dataset_ids(body.get("dataset_ids")),
+                    quorum_proof=str(body.get("quorum_proof") or ""),
+                    execution_mode=str(body.get("execution_mode") or "actual"),
+                    training_command=self._optional_str(body.get("training_command")),
+                    simulation_smoke_test=bool(body.get("simulation_smoke_test", False)),
+                    base_model_id=self._optional_str(body.get("base_model_id")),
+                    base_model_execution_ticket=(
+                        self._require_mapping(
+                            body.get("base_model_execution_ticket"),
+                            "base_model_execution_ticket",
+                        )
+                        if body.get("base_model_execution_ticket") is not None
+                        else None
+                    ),
+                    base_model_admissibility_decision_id=self._optional_str(
+                        body.get("base_model_admissibility_decision_id"),
+                    ),
+                    dataset_ref=self._optional_str(body.get("dataset_ref")),
+                    dataset_provenance=self._optional_str(body.get("dataset_provenance")),
+                    dataset_source_type=self._optional_str(body.get("dataset_source_type")),
+                    dataset_license=self._optional_str(body.get("dataset_license")),
+                    dataset_hash=self._optional_str(body.get("dataset_hash")),
+                    dataset_immutable_ref=self._optional_str(body.get("dataset_immutable_ref")),
+                    dataset_immutable_proof=self._optional_str(body.get("dataset_immutable_proof")),
+                    policy_profile=self._optional_str(body.get("policy_profile")),
+                    trust_level=str(body.get("trust_level") or "reviewed"),
+                    artifact_store_uri=self._optional_str(body.get("artifact_store_uri")),
+                    trainer_backend=self._optional_str(body.get("training_backend")),
+                )
+            except PolicyViolation as exc:
+                raw_reason = str(exc)
+                reason = raw_reason
+                for prefix in (
+                    "training_preflight_denied:",
+                    "mutation_execution_failed:",
+                    "training_execution_failed:",
+                ):
+                    if reason.startswith(prefix):
+                        reason = reason[len(prefix):]
+                self._send_json(
+                    {
+                        "allowed": False,
+                        "mode": self._normalize_workshop_mode(
+                            str(body.get("execution_mode") or "actual"),
+                        ),
+                        "reason": reason,
+                    },
+                    status=403,
+                )
+                return
+
+            payload = result.get("payload", {}) if isinstance(result, dict) else {}
+            self._send_json(
+                {
+                    "allowed": True,
+                    "mode": str(payload.get("mode") or "actual_training"),
+                    "reason": "ok",
+                    "result": result,
+                },
+                status=200,
+            )
+
+        @staticmethod
+        def _optional_str(value: Any) -> str | None:
+            if value is None:
+                return None
+            text = str(value).strip()
+            return text or None
+
+        @staticmethod
+        def _dataset_ids(value: Any) -> tuple[str, ...]:
+            if value is None:
+                return tuple()
+            if isinstance(value, list):
+                return tuple(str(item).strip() for item in value if str(item).strip())
+            text = str(value).strip()
+            if not text:
+                return tuple()
+            return tuple(part.strip() for part in text.split(",") if part.strip())
+
+        @staticmethod
+        def _normalize_workshop_mode(execution_mode: str) -> str:
+            normalized = execution_mode.strip().lower()
+            if normalized in {"simulated", "simulation"}:
+                return "simulation"
+            return "actual_training"
 
         def _authorized(self) -> bool:
             token = os.getenv("SOVEREIGN_SERVICE_TOKEN", "").strip()

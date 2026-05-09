@@ -27,8 +27,10 @@ from .models import (
     CapabilityToken,
     GovernanceContext,
     MutationClass,
+    SignatureEnvelope,
     canonical_json,
     new_id,
+    sha256_hex,
     to_primitive,
     utc_now,
 )
@@ -88,6 +90,32 @@ DOCTRINE_KEYWORDS = {
     ),
 }
 
+LOCAL_ARTIFACT_URI_PREFIXES = (
+    "file://",
+    "local://",
+    "simulated://",
+    "./",
+    ".\\",
+    "../",
+    "..\\",
+)
+
+DURABLE_ARTIFACT_URI_SCHEMES = (
+    "https://",
+    "s3://",
+    "gs://",
+    "az://",
+    "hf://",
+    "huggingface://",
+)
+
+MUTABLE_DATASET_SOURCE_TYPES = {
+    "http_url",
+    "remote_dataset_alias",
+    "external_registry",
+    "huggingface_dataset_id",
+}
+
 
 def _load_json(path: Path, default_value: Any) -> Any:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -143,6 +171,29 @@ class DatasetConstitutionManifest:
 
 
 @dataclass(frozen=True)
+class DatasetTrainingReference:
+    dataset_id: str
+    dataset_ref: str
+    dataset_path: str
+    dataset_provenance: str
+    dataset_source_type: str
+    dataset_license: str
+    dataset_hash: str
+    dataset_immutable_ref: str
+    mutable_reference: bool
+    immutable_proof: str | None
+
+
+@dataclass(frozen=True)
+class TrainingPreflightResult:
+    allowed: bool
+    mode: str
+    reason: str
+    reason_codes: tuple[str, ...]
+    details: dict[str, Any]
+
+
+@dataclass(frozen=True)
 class TrainingCheckpointRecord:
     checkpoint_id: str
     run_id: str
@@ -166,6 +217,7 @@ class TrainingJobRequest:
     output_dir: str
     training_backend: str
     artifact_store_uri: str | None
+    governance_metadata: dict[str, Any]
     requested_at: str
 
 
@@ -228,6 +280,7 @@ class WorkshopPaths:
     promotions: Path
     repair_store: Path
     continuity_index: Path
+    training_artifact_contract: Path
     report_path: Path
 
 
@@ -476,9 +529,29 @@ class ConstitutionalDatasetFoundry:
             )
             manifests.append(manifest)
 
-            dataset_payload = {
+            dataset_payload_unsigned = {
                 "manifest": to_primitive(manifest),
                 "records": records,
+            }
+            dataset_hash = hashlib.sha256(
+                canonical_json(dataset_payload_unsigned).encode("utf-8"),
+            ).hexdigest()
+            governance = {
+                "dataset_ref": f"dataset://{dataset_id}",
+                "provenance_ref": f"dataset-manifest://{dataset_id}",
+                "source_type": "workshop_constitutional_dataset",
+                "license": "derived-from-admitted-artifacts",
+                "dataset_hash": dataset_hash,
+                "immutable_ref": f"sha256:{dataset_hash}",
+                "mutable_reference": False,
+                "immutable_proof": (
+                    f"signature://{manifest.signature.get('key_id', 'unknown')}/"
+                    f"{manifest.signature.get('signature', '')}"
+                ),
+            }
+            dataset_payload = {
+                **dataset_payload_unsigned,
+                "governance": governance,
             }
             _save_json(
                 self.datasets_dir / f"{dataset_id}.json",
@@ -492,6 +565,14 @@ class ConstitutionalDatasetFoundry:
                         (self.datasets_dir / f"{dataset_id}.json").resolve(),
                     ),
                     "created_at": manifest.created_at,
+                    "dataset_ref": governance["dataset_ref"],
+                    "dataset_provenance": governance["provenance_ref"],
+                    "dataset_source_type": governance["source_type"],
+                    "dataset_license": governance["license"],
+                    "dataset_hash": governance["dataset_hash"],
+                    "dataset_immutable_ref": governance["immutable_ref"],
+                    "mutable_reference": governance["mutable_reference"],
+                    "immutable_proof": governance["immutable_proof"],
                 },
             )
 
@@ -538,6 +619,9 @@ class TrainingOrchestrationCore:
         dataset_paths: list[Path],
         execution_mode: str,
         training_command: str | None = None,
+        training_backend: str | None = None,
+        artifact_store_uri: str | None = None,
+        governance_metadata: dict[str, Any] | None = None,
     ) -> tuple[dict[str, Any], TrainingCheckpointRecord]:
         if execution_mode == "simulated":
             return self._start_simulated_run(
@@ -553,6 +637,9 @@ class TrainingOrchestrationCore:
             dataset_manifests=dataset_manifests,
             dataset_paths=dataset_paths,
             training_command=training_command,
+            training_backend=training_backend,
+            artifact_store_uri=artifact_store_uri,
+            governance_metadata=governance_metadata,
         )
 
     def _start_simulated_run(
@@ -615,6 +702,9 @@ class TrainingOrchestrationCore:
         dataset_manifests: list[DatasetConstitutionManifest],
         dataset_paths: list[Path],
         training_command: str | None,
+        training_backend: str | None,
+        artifact_store_uri: str | None,
+        governance_metadata: dict[str, Any] | None,
     ) -> tuple[dict[str, Any], TrainingCheckpointRecord]:
         command = (
             training_command
@@ -625,14 +715,16 @@ class TrainingOrchestrationCore:
                 "actual training requires --training-command or "
                 "SOVEREIGN_TRAINING_COMMAND",
             )
-        training_backend = (
-            os.getenv("SOVEREIGN_TRAINING_BACKEND", "local-command").strip()
-            or "local-command"
-        )
-        artifact_store_uri = (
-            os.getenv("SOVEREIGN_TRAINING_ARTIFACT_STORE", "").strip()
-            or None
-        )
+        resolved_training_backend = str(training_backend or "").strip()
+        if not resolved_training_backend:
+            raise ValueError(
+                "actual training requires configured trainer backend",
+            )
+        resolved_artifact_store_uri = str(artifact_store_uri or "").strip()
+        if not resolved_artifact_store_uri:
+            raise ValueError(
+                "actual training requires configured artifact store",
+            )
 
         state = _load_json(
             self.training_runs_path,
@@ -652,8 +744,9 @@ class TrainingOrchestrationCore:
             dataset_ids=tuple(m.dataset_id for m in dataset_manifests),
             dataset_paths=tuple(str(path.resolve()) for path in dataset_paths),
             output_dir=str(output_dir.resolve()),
-            training_backend=training_backend,
-            artifact_store_uri=artifact_store_uri,
+            training_backend=resolved_training_backend,
+            artifact_store_uri=resolved_artifact_store_uri,
+            governance_metadata=dict(governance_metadata or {}),
             requested_at=utc_now(),
         )
         request_path = request_dir / f"{run_id}.request.json"
@@ -706,12 +799,11 @@ class TrainingOrchestrationCore:
         manifest_artifact_store = str(
             output_manifest.get("artifact_store_uri", ""),
         ).strip()
-        if artifact_store_uri:
-            self._validate_durable_training_artifact(
-                artifact_uri=artifact_uri,
-                artifact_store_uri=artifact_store_uri,
-                manifest_artifact_store=manifest_artifact_store,
-            )
+        self._validate_durable_training_artifact(
+            artifact_uri=artifact_uri,
+            artifact_store_uri=resolved_artifact_store_uri,
+            manifest_artifact_store=manifest_artifact_store,
+        )
 
         run_payload = {
             "run_id": run_id,
@@ -722,8 +814,8 @@ class TrainingOrchestrationCore:
             "execution_mode": "actual",
             "artifact_kind": "trained_checkpoint",
             "training_command": command,
-            "training_backend": training_backend,
-            "artifact_store_uri": artifact_store_uri,
+            "training_backend": resolved_training_backend,
+            "artifact_store_uri": resolved_artifact_store_uri,
             "request_path": str(request_path.resolve()),
             "output_manifest_path": str(output_manifest_path.resolve()),
             "started_at": started_at,
@@ -1267,6 +1359,15 @@ def default_workshop_policy(workspace_root: Path) -> dict[str, Any]:
                 "quorum_required": False,
                 "risk_score": 70,
             },
+            "preflight_training_run": {
+                "required_mutation_class": "read",
+                "allowed_roles": [
+                    "model_steward",
+                    "release_authority",
+                ],
+                "quorum_required": False,
+                "risk_score": 25,
+            },
             "start_training_run": {
                 "required_mutation_class": "governanceMutation",
                 "allowed_roles": [
@@ -1275,6 +1376,26 @@ def default_workshop_policy(workspace_root: Path) -> dict[str, Any]:
                 ],
                 "quorum_required": True,
                 "risk_score": 90,
+            },
+            "register_model": {
+                "required_mutation_class": "governanceMutation",
+                "allowed_roles": [
+                    "model_steward",
+                    "release_authority",
+                ],
+                "quorum_required": True,
+                "risk_score": 90,
+            },
+            "execute_model": {
+                "required_mutation_class": "read",
+                "allowed_roles": [
+                    "developer",
+                    "reviewer",
+                    "model_steward",
+                    "release_authority",
+                ],
+                "quorum_required": False,
+                "risk_score": 25,
             },
             "run_shadow_evaluation": {
                 "required_mutation_class": "hardMutation",
@@ -1418,6 +1539,9 @@ class SovereignModelServerWorkshop:
             promotions=state_dir / "workshop" / "promotions.json",
             repair_store=state_dir / "workshop" / "repair_store.json",
             continuity_index=state_dir / "workshop" / "continuity_index.json",
+            training_artifact_contract=(
+                state_dir / "workshop" / "training_artifact_contract.json"
+            ),
             report_path=(
                 workspace_root
                 / "integration"
@@ -1444,6 +1568,10 @@ class SovereignModelServerWorkshop:
         _load_json(self.paths.evaluations, {"evaluations": []})
         _load_json(self.paths.promotions, {"bundles": []})
         _load_json(self.paths.repair_store, {"units": [], "applied": []})
+        _load_json(
+            self.paths.training_artifact_contract,
+            {"artifacts": []},
+        )
         _load_json(
             self.paths.continuity_index,
             {
@@ -1705,6 +1833,617 @@ class SovereignModelServerWorkshop:
             quorum_proof=None,
         )
 
+    @staticmethod
+    def _normalize_training_mode(execution_mode: str) -> str | None:
+        normalized = execution_mode.strip().lower()
+        aliases = {
+            "simulated": "simulation",
+            "simulation": "simulation",
+            "actual": "actual_training",
+            "actual_training": "actual_training",
+        }
+        return aliases.get(normalized)
+
+    @staticmethod
+    def _strip_mutation_failure_prefix(reason: str) -> str:
+        prefix = "mutation_execution_failed:"
+        if reason.startswith(prefix):
+            return reason[len(prefix):]
+        return reason
+
+    def _record_training_preflight_event(
+        self,
+        context: GovernanceContext,
+        model_family: str,
+        preflight: TrainingPreflightResult,
+    ) -> None:
+        event_type = (
+            "training_preflight_allowed"
+            if preflight.allowed
+            else "training_preflight_denied"
+        )
+        self.journal.append(
+            event_type,
+            context.trace_id,
+            {
+                "model_family": model_family,
+                "mode": preflight.mode,
+                "allowed": preflight.allowed,
+                "reason": preflight.reason,
+                "reason_codes": list(preflight.reason_codes),
+                "details": preflight.details,
+            },
+        )
+
+    @staticmethod
+    def _artifact_store_is_local(artifact_store_uri: str) -> bool:
+        lower = artifact_store_uri.strip().lower()
+        if any(lower.startswith(scheme) for scheme in DURABLE_ARTIFACT_URI_SCHEMES):
+            return False
+        if lower.startswith("http://"):
+            return True
+        if any(lower.startswith(prefix) for prefix in LOCAL_ARTIFACT_URI_PREFIXES):
+            return True
+        return "://" not in lower
+
+    @staticmethod
+    def _artifact_store_is_durable(artifact_store_uri: str) -> bool:
+        lower = artifact_store_uri.strip().lower()
+        return any(lower.startswith(scheme) for scheme in DURABLE_ARTIFACT_URI_SCHEMES)
+
+    @staticmethod
+    def _artifact_store_writable(artifact_store_uri: str) -> bool:
+        candidate = artifact_store_uri.strip()
+        if not candidate:
+            return False
+        if "://" in candidate and not candidate.startswith("file://"):
+            return True
+
+        if candidate.startswith("file://"):
+            path = Path(candidate[7:])
+        else:
+            path = Path(candidate)
+        path = path.resolve()
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+            probe = path / ".write_probe"
+            probe.write_text("probe", encoding="utf-8")
+            probe.unlink(missing_ok=True)
+            return True
+        except OSError:
+            return False
+
+    def _checkpoint_registry_path_writable(self) -> bool:
+        registry_path = self.settings.model_registry_path
+        try:
+            registry_path.parent.mkdir(parents=True, exist_ok=True)
+            if not registry_path.exists():
+                _save_json(registry_path, {"models": {}, "immutable_index": {}})
+            return True
+        except OSError:
+            return False
+
+    def _has_admissibility_decision(self, decision_id: str) -> bool:
+        for entry in self.journal.read_all():
+            if entry.get("record_type") != "decision_record":
+                continue
+            payload = entry.get("payload", {})
+            if str(payload.get("decision_id")) != decision_id:
+                continue
+            if str(payload.get("outcome")) != "approved":
+                return False
+            if str(payload.get("action")) not in {
+                "execute_model",
+                "register_model",
+            }:
+                return False
+            return True
+        return False
+
+    def _verify_base_model_ticket(
+        self,
+        ticket: dict[str, Any],
+        base_model: Any,
+    ) -> tuple[bool, str]:
+        required_fields = {
+            "ticket_id",
+            "model_id",
+            "registry_entry_hash",
+            "policy_profile",
+            "trust_level",
+            "source_type",
+            "provenance_ref",
+            "issued_at",
+            "expires_at",
+            "ticket_purpose",
+            "signer_type",
+            "signature",
+        }
+        missing = sorted(required_fields.difference(ticket.keys()))
+        if missing:
+            return False, "base_model_ticket_missing_fields"
+
+        signature = ticket.get("signature")
+        if not isinstance(signature, dict):
+            return False, "base_model_ticket_signature_missing"
+        for field in ("algorithm", "key_id", "signature"):
+            if field not in signature:
+                return False, "base_model_ticket_signature_invalid"
+
+        try:
+            expires_at = datetime.fromisoformat(str(ticket["expires_at"]))
+            if expires_at.tzinfo is None:
+                expires_at = expires_at.replace(tzinfo=timezone.utc)
+            if datetime.now(timezone.utc) >= expires_at.astimezone(timezone.utc):
+                return False, "base_model_ticket_expired"
+        except ValueError:
+            return False, "base_model_ticket_expiry_invalid"
+
+        envelope = SignatureEnvelope(
+            algorithm=str(signature["algorithm"]),
+            key_id=str(signature["key_id"]),
+            signature=str(signature["signature"]),
+            signed_at=str(signature.get("signed_at") or utc_now()),
+        )
+        unsigned = {
+            key: value
+            for key, value in ticket.items()
+            if key != "signature"
+        }
+        if not self.signer.verify(unsigned, envelope):
+            return False, "base_model_ticket_signature_invalid"
+
+        if str(ticket.get("model_id")) != str(base_model.model_id):
+            return False, "base_model_ticket_model_mismatch"
+        if str(ticket.get("registry_entry_hash")) != sha256_hex(to_primitive(base_model)):
+            return False, "base_model_ticket_registry_hash_mismatch"
+        if str(ticket.get("policy_profile")) != str(base_model.policy_profile):
+            return False, "base_model_ticket_policy_profile_mismatch"
+        if str(ticket.get("provenance_ref")) != str(base_model.provenance_ref):
+            return False, "base_model_ticket_provenance_mismatch"
+        return True, "ok"
+
+    @staticmethod
+    def _dataset_manifest_from_payload(payload: dict[str, Any]) -> DatasetConstitutionManifest:
+        manifest = payload.get("manifest")
+        if not isinstance(manifest, dict):
+            raise ValueError("dataset_manifest_missing")
+        return DatasetConstitutionManifest(
+            dataset_id=str(manifest["dataset_id"]),
+            product_name=str(manifest["product_name"]),
+            source_artifact_ids=tuple(manifest["source_artifact_ids"]),
+            source_chunk_ids=tuple(manifest["source_chunk_ids"]),
+            transform_steps=tuple(manifest["transform_steps"]),
+            policy_flags=tuple(manifest["policy_flags"]),
+            admission_signatures=tuple(manifest["admission_signatures"]),
+            created_by=str(manifest["created_by"]),
+            created_at=str(manifest["created_at"]),
+            signature=dict(manifest["signature"]),
+        )
+
+    def _resolve_dataset_training_inputs(
+        self,
+        *,
+        dataset_ids: tuple[str, ...],
+        dataset_ref: str | None,
+        dataset_provenance: str | None,
+        dataset_source_type: str | None,
+        dataset_license: str | None,
+        dataset_hash: str | None,
+        dataset_immutable_ref: str | None,
+        dataset_immutable_proof: str | None,
+    ) -> tuple[
+        list[DatasetConstitutionManifest],
+        list[DatasetTrainingReference],
+        list[Path],
+        list[str],
+    ]:
+        dataset_state = _load_json(self.paths.dataset_index, {"datasets": []})
+        entries = list(dataset_state.get("datasets", []))
+        by_id = {
+            str(item.get("dataset_id")): item
+            for item in entries
+            if item.get("dataset_id")
+        }
+
+        selected_ids = [dataset_id for dataset_id in dataset_ids if dataset_id]
+        reasons: list[str] = []
+        if not selected_ids and dataset_ref:
+            matched = next(
+                (
+                    item
+                    for item in entries
+                    if str(item.get("dataset_ref")) == dataset_ref
+                    or str(item.get("dataset_id")) == dataset_ref
+                ),
+                None,
+            )
+            if matched is None:
+                reasons.append("dataset_ref_unknown")
+            else:
+                selected_ids = [str(matched["dataset_id"])]
+
+        if not selected_ids:
+            reasons.append("dataset_reference_missing")
+            return [], [], [], reasons
+
+        manifests: list[DatasetConstitutionManifest] = []
+        references: list[DatasetTrainingReference] = []
+        dataset_paths: list[Path] = []
+
+        for selected_id in selected_ids:
+            entry = by_id.get(selected_id)
+            if entry is None:
+                reasons.append(f"dataset_id_unknown:{selected_id}")
+                continue
+
+            payload_path = Path(str(entry.get("path", ""))).resolve()
+            if not payload_path.exists():
+                reasons.append(f"dataset_payload_missing:{selected_id}")
+                continue
+
+            payload = _load_json(payload_path, {})
+            try:
+                manifests.append(self._dataset_manifest_from_payload(payload))
+            except Exception:  # noqa: BLE001
+                reasons.append(f"dataset_manifest_missing:{selected_id}")
+                continue
+
+            governance = payload.get("governance")
+            if not isinstance(governance, dict):
+                governance = {}
+
+            reference = DatasetTrainingReference(
+                dataset_id=selected_id,
+                dataset_ref=str(
+                    governance.get("dataset_ref")
+                    or entry.get("dataset_ref")
+                    or dataset_ref
+                    or f"dataset://{selected_id}"
+                ),
+                dataset_path=str(payload_path),
+                dataset_provenance=str(
+                    governance.get("provenance_ref")
+                    or entry.get("dataset_provenance")
+                    or dataset_provenance
+                    or ""
+                ),
+                dataset_source_type=str(
+                    governance.get("source_type")
+                    or entry.get("dataset_source_type")
+                    or dataset_source_type
+                    or ""
+                ),
+                dataset_license=str(
+                    governance.get("license")
+                    or entry.get("dataset_license")
+                    or dataset_license
+                    or ""
+                ),
+                dataset_hash=str(
+                    governance.get("dataset_hash")
+                    or entry.get("dataset_hash")
+                    or dataset_hash
+                    or _sha256_file(payload_path)
+                ),
+                dataset_immutable_ref=str(
+                    governance.get("immutable_ref")
+                    or entry.get("dataset_immutable_ref")
+                    or dataset_immutable_ref
+                    or ""
+                ),
+                mutable_reference=bool(
+                    governance.get(
+                        "mutable_reference",
+                        entry.get("mutable_reference", False),
+                    ),
+                ),
+                immutable_proof=(
+                    str(
+                        governance.get("immutable_proof")
+                        or entry.get("immutable_proof")
+                        or dataset_immutable_proof
+                        or "",
+                    ).strip()
+                    or None
+                ),
+            )
+            references.append(reference)
+            dataset_paths.append(payload_path)
+
+        return manifests, references, dataset_paths, reasons
+
+    def _evaluate_training_preflight(
+        self,
+        *,
+        context: GovernanceContext,
+        model_family: str,
+        base_checkpoint: str | None,
+        dataset_ids: tuple[str, ...],
+        dataset_ref: str | None,
+        dataset_provenance: str | None,
+        dataset_source_type: str | None,
+        dataset_license: str | None,
+        dataset_hash: str | None,
+        dataset_immutable_ref: str | None,
+        dataset_immutable_proof: str | None,
+        execution_mode: str,
+        simulation_smoke_test: bool,
+        training_command: str | None,
+        training_backend: str | None,
+        artifact_store_uri: str | None,
+        base_model_id: str | None,
+        base_model_execution_ticket: dict[str, Any] | None,
+        base_model_admissibility_decision_id: str | None,
+        policy_profile: str | None,
+        trust_level: str,
+    ) -> tuple[TrainingPreflightResult, dict[str, Any]]:
+        mode = self._normalize_training_mode(execution_mode)
+        reasons: list[str] = []
+        if mode is None:
+            reasons.append("training_mode_invalid")
+            mode = "unknown"
+
+        manifests, references, dataset_paths, dataset_reasons = self._resolve_dataset_training_inputs(
+            dataset_ids=dataset_ids,
+            dataset_ref=dataset_ref,
+            dataset_provenance=dataset_provenance,
+            dataset_source_type=dataset_source_type,
+            dataset_license=dataset_license,
+            dataset_hash=dataset_hash,
+            dataset_immutable_ref=dataset_immutable_ref,
+            dataset_immutable_proof=dataset_immutable_proof,
+        )
+        reasons.extend(dataset_reasons)
+
+        for reference in references:
+            if not reference.dataset_ref.strip():
+                reasons.append(f"dataset_ref_missing:{reference.dataset_id}")
+            if not reference.dataset_provenance.strip():
+                reasons.append(f"dataset_provenance_missing:{reference.dataset_id}")
+            if not reference.dataset_source_type.strip():
+                reasons.append(f"dataset_source_type_missing:{reference.dataset_id}")
+            if not reference.dataset_license.strip():
+                reasons.append(f"dataset_license_missing:{reference.dataset_id}")
+            if not (
+                reference.dataset_hash.strip()
+                or reference.dataset_immutable_ref.strip()
+            ):
+                reasons.append(
+                    f"dataset_hash_or_immutable_ref_missing:{reference.dataset_id}",
+                )
+
+            mutable = reference.mutable_reference or (
+                reference.dataset_source_type in MUTABLE_DATASET_SOURCE_TYPES
+            )
+            if trust_level in {"reviewed", "trusted"} and mutable and not reference.immutable_proof:
+                reasons.append(
+                    f"mutable_dataset_requires_immutable_proof:{reference.dataset_id}",
+                )
+
+        resolved_training_command = (
+            training_command
+            or os.getenv("SOVEREIGN_TRAINING_COMMAND", "").strip()
+        )
+        resolved_training_backend = (
+            training_backend
+            or os.getenv("SOVEREIGN_TRAINING_BACKEND", "").strip()
+        )
+        resolved_artifact_store_uri = (
+            artifact_store_uri
+            or os.getenv("SOVEREIGN_TRAINING_ARTIFACT_STORE", "").strip()
+        )
+
+        base_model_record = None
+        if mode == "simulation":
+            if not simulation_smoke_test:
+                reasons.append("simulation_flag_required")
+        elif mode == "actual_training":
+            if not base_model_id:
+                reasons.append("base_model_missing")
+            else:
+                registry = GovernedModelRegistry(self.settings.model_registry_path)
+                try:
+                    base_model_record = registry.get(base_model_id)
+                except KeyError:
+                    reasons.append("base_model_unknown")
+                else:
+                    if not base_model_record.policy_profile.strip():
+                        reasons.append("base_model_policy_profile_missing")
+                    if not base_model_record.provenance_ref.strip():
+                        reasons.append("base_model_provenance_missing")
+                    if base_model_record.trust_level not in {"reviewed", "trusted"}:
+                        reasons.append("base_model_insufficient_trust")
+                    if base_model_record.admissibility_status != "admissible":
+                        reasons.append("base_model_not_admissible")
+
+            if not base_model_execution_ticket and not base_model_admissibility_decision_id:
+                reasons.append("base_model_authorization_missing")
+            if base_model_execution_ticket is not None and base_model_record is not None:
+                valid_ticket, ticket_reason = self._verify_base_model_ticket(
+                    base_model_execution_ticket,
+                    base_model_record,
+                )
+                if not valid_ticket:
+                    reasons.append(ticket_reason)
+            if base_model_admissibility_decision_id:
+                if not self._has_admissibility_decision(
+                    base_model_admissibility_decision_id,
+                ):
+                    reasons.append("base_model_admissibility_decision_invalid")
+
+            if not str(policy_profile or "").strip():
+                reasons.append("policy_profile_missing")
+            if not str(trust_level or "").strip():
+                reasons.append("trust_level_missing")
+
+            if not resolved_artifact_store_uri:
+                reasons.append("artifact_store_missing")
+            else:
+                runtime_mode = str(self.settings.runtime_mode).lower()
+                if runtime_mode in {"production", "rehearsal"} and self._artifact_store_is_local(
+                    resolved_artifact_store_uri,
+                ):
+                    reasons.append("artifact_store_not_durable")
+                if self._artifact_store_is_local(resolved_artifact_store_uri):
+                    if not self._artifact_store_writable(resolved_artifact_store_uri):
+                        reasons.append("artifact_store_not_writable")
+                elif not self._artifact_store_is_durable(resolved_artifact_store_uri):
+                    reasons.append("artifact_store_not_durable")
+
+            if not resolved_training_backend:
+                reasons.append("trainer_backend_missing")
+            if not resolved_training_command:
+                reasons.append("training_command_missing")
+            if not self._checkpoint_registry_path_writable():
+                reasons.append("checkpoint_registration_path_unwritable")
+            if self.settings.journal_backend not in {"file", "sqlite"}:
+                reasons.append("audit_journal_disabled")
+
+        details = {
+            "trace_id": context.trace_id,
+            "model_family": model_family,
+            "base_checkpoint": base_checkpoint,
+            "base_model_id": base_model_id,
+            "dataset_ids": [reference.dataset_id for reference in references],
+            "dataset_refs": [reference.dataset_ref for reference in references],
+            "policy_profile": str(policy_profile or "").strip(),
+            "trust_level": str(trust_level or "").strip(),
+            "artifact_store_uri": resolved_artifact_store_uri,
+            "trainer_backend": resolved_training_backend,
+            "training_command": resolved_training_command,
+            "simulation_smoke_test": simulation_smoke_test,
+        }
+
+        preflight = TrainingPreflightResult(
+            allowed=not reasons,
+            mode=mode,
+            reason=("ok" if not reasons else reasons[0]),
+            reason_codes=tuple(reasons),
+            details=details,
+        )
+        training_config_hash = hashlib.sha256(
+            canonical_json(
+                {
+                    "mode": mode,
+                    "model_family": model_family,
+                    "base_model_id": base_model_id,
+                    "base_checkpoint": base_checkpoint,
+                    "dataset_references": [to_primitive(reference) for reference in references],
+                    "policy_profile": str(policy_profile or "").strip(),
+                    "trust_level": str(trust_level or "").strip(),
+                    "artifact_store_uri": resolved_artifact_store_uri,
+                    "trainer_backend": resolved_training_backend,
+                    "training_command": resolved_training_command,
+                },
+            ).encode("utf-8"),
+        ).hexdigest()
+
+        return preflight, {
+            "dataset_manifests": manifests,
+            "dataset_references": references,
+            "dataset_paths": dataset_paths,
+            "resolved_training_command": resolved_training_command,
+            "resolved_training_backend": resolved_training_backend,
+            "resolved_artifact_store_uri": resolved_artifact_store_uri,
+            "base_model_record": base_model_record,
+            "training_config_hash": training_config_hash,
+        }
+
+    def preflight_training_run(
+        self,
+        *,
+        context: GovernanceContext,
+        model_family: str,
+        base_checkpoint: str | None,
+        dataset_ids: tuple[str, ...],
+        execution_mode: str,
+        simulation_smoke_test: bool,
+        training_command: str | None,
+        training_backend: str | None,
+        artifact_store_uri: str | None,
+        base_model_id: str | None,
+        base_model_execution_ticket: dict[str, Any] | None,
+        base_model_admissibility_decision_id: str | None,
+        dataset_ref: str | None,
+        dataset_provenance: str | None,
+        dataset_source_type: str | None,
+        dataset_license: str | None,
+        dataset_hash: str | None,
+        dataset_immutable_ref: str | None,
+        dataset_immutable_proof: str | None,
+        policy_profile: str | None,
+        trust_level: str,
+    ) -> dict[str, Any]:
+        preflight, _ = self._evaluate_training_preflight(
+            context=context,
+            model_family=model_family,
+            base_checkpoint=base_checkpoint,
+            dataset_ids=dataset_ids,
+            dataset_ref=dataset_ref,
+            dataset_provenance=dataset_provenance,
+            dataset_source_type=dataset_source_type,
+            dataset_license=dataset_license,
+            dataset_hash=dataset_hash,
+            dataset_immutable_ref=dataset_immutable_ref,
+            dataset_immutable_proof=dataset_immutable_proof,
+            execution_mode=execution_mode,
+            simulation_smoke_test=simulation_smoke_test,
+            training_command=training_command,
+            training_backend=training_backend,
+            artifact_store_uri=artifact_store_uri,
+            base_model_id=base_model_id,
+            base_model_execution_ticket=base_model_execution_ticket,
+            base_model_admissibility_decision_id=base_model_admissibility_decision_id,
+            policy_profile=policy_profile,
+            trust_level=trust_level,
+        )
+
+        token = self._capability_token(
+            context.actor_id,
+            context.trust_domain,
+            scopes=("preflight_training_run",),
+        )
+        _request, evaluation, _binding = self.runtime.evaluate_and_bind(
+            context=context,
+            action="preflight_training_run",
+            resource=str(self.paths.training_runs),
+            mutation_class=MutationClass.READ,
+            capability_token=token,
+        )
+
+        reason_codes = list(preflight.reason_codes)
+        if not evaluation.allowed:
+            reason_codes.extend(
+                f"policy_{reason}"
+                for reason in evaluation.denial_reasons
+            )
+
+        merged_details = {
+            **preflight.details,
+            "policy_evaluation": to_primitive(evaluation),
+        }
+        preflight = TrainingPreflightResult(
+            allowed=preflight.allowed and evaluation.allowed,
+            mode=preflight.mode,
+            reason=("ok" if not reason_codes else reason_codes[0]),
+            reason_codes=tuple(reason_codes),
+            details=merged_details,
+        )
+
+        self._record_training_preflight_event(
+            context=context,
+            model_family=model_family,
+            preflight=preflight,
+        )
+        return {
+            "allowed": preflight.allowed,
+            "mode": preflight.mode,
+            "reason": preflight.reason,
+            "reason_codes": list(preflight.reason_codes),
+            "details": preflight.details,
+        }
+
     def start_training_run(
         self,
         context: GovernanceContext,
@@ -1714,91 +2453,192 @@ class SovereignModelServerWorkshop:
         quorum_proof: str,
         execution_mode: str = "actual",
         training_command: str | None = None,
+        simulation_smoke_test: bool = False,
+        base_model_id: str | None = None,
+        base_model_execution_ticket: dict[str, Any] | None = None,
+        base_model_admissibility_decision_id: str | None = None,
+        dataset_ref: str | None = None,
+        dataset_provenance: str | None = None,
+        dataset_source_type: str | None = None,
+        dataset_license: str | None = None,
+        dataset_hash: str | None = None,
+        dataset_immutable_ref: str | None = None,
+        dataset_immutable_proof: str | None = None,
+        policy_profile: str | None = None,
+        trust_level: str = "reviewed",
+        artifact_store_uri: str | None = None,
+        trainer_backend: str | None = None,
     ) -> dict[str, Any]:
-        def _mutate() -> dict[str, Any]:
-            dataset_state = _load_json(
-                self.paths.dataset_index,
-                {"datasets": []},
-            )
-            dataset_paths = {
-                item["dataset_id"]: Path(item["path"])
-                for item in dataset_state.get("datasets", [])
-            }
-            missing = [
-                dataset_id
-                for dataset_id in dataset_ids
-                if dataset_id not in dataset_paths
-            ]
-            if missing:
-                raise ValueError(f"unknown dataset ids: {','.join(missing)}")
+        preflight, preflight_inputs = self._evaluate_training_preflight(
+            context=context,
+            model_family=model_family,
+            base_checkpoint=base_checkpoint,
+            dataset_ids=dataset_ids,
+            dataset_ref=dataset_ref,
+            dataset_provenance=dataset_provenance,
+            dataset_source_type=dataset_source_type,
+            dataset_license=dataset_license,
+            dataset_hash=dataset_hash,
+            dataset_immutable_ref=dataset_immutable_ref,
+            dataset_immutable_proof=dataset_immutable_proof,
+            execution_mode=execution_mode,
+            simulation_smoke_test=simulation_smoke_test,
+            training_command=training_command,
+            training_backend=trainer_backend,
+            artifact_store_uri=artifact_store_uri,
+            base_model_id=base_model_id,
+            base_model_execution_ticket=base_model_execution_ticket,
+            base_model_admissibility_decision_id=base_model_admissibility_decision_id,
+            policy_profile=policy_profile,
+            trust_level=trust_level,
+        )
+        self._record_training_preflight_event(
+            context=context,
+            model_family=model_family,
+            preflight=preflight,
+        )
+        if not preflight.allowed:
+            raise PolicyViolation(f"training_preflight_denied:{preflight.reason}")
 
-            manifests: list[DatasetConstitutionManifest] = []
-            for dataset_id in dataset_ids:
-                payload = _load_json(dataset_paths[dataset_id], {})
-                manifest = payload.get("manifest")
-                if not manifest:
-                    raise ValueError(
-                        f"manifest missing for dataset: {dataset_id}",
-                    )
-                manifests.append(
-                    DatasetConstitutionManifest(
-                        dataset_id=manifest["dataset_id"],
-                        product_name=manifest["product_name"],
-                        source_artifact_ids=tuple(
-                            manifest["source_artifact_ids"],
-                        ),
-                        source_chunk_ids=tuple(manifest["source_chunk_ids"]),
-                        transform_steps=tuple(manifest["transform_steps"]),
-                        policy_flags=tuple(manifest["policy_flags"]),
-                        admission_signatures=tuple(
-                            manifest["admission_signatures"],
-                        ),
-                        created_by=manifest["created_by"],
-                        created_at=manifest["created_at"],
-                        signature=manifest["signature"],
+        def _mutate() -> dict[str, Any]:
+            mode = preflight.mode
+            event_started = (
+                "simulation_started"
+                if mode == "simulation"
+                else "training_started"
+            )
+            dataset_reference_payload = [
+                to_primitive(reference)
+                for reference in preflight_inputs["dataset_references"]
+            ]
+
+            self.journal.append(
+                event_started,
+                context.trace_id,
+                {
+                    "mode": mode,
+                    "model_family": model_family,
+                    "base_model_id": base_model_id,
+                    "dataset_refs": [
+                        reference["dataset_ref"]
+                        for reference in dataset_reference_payload
+                    ],
+                    "training_config_hash": preflight_inputs["training_config_hash"],
+                },
+            )
+
+            try:
+                run_payload, checkpoint = self.training_core.start_run(
+                    model_family=model_family,
+                    base_checkpoint=base_checkpoint,
+                    dataset_manifests=preflight_inputs["dataset_manifests"],
+                    dataset_paths=preflight_inputs["dataset_paths"],
+                    execution_mode=(
+                        "simulated" if mode == "simulation" else "actual"
                     ),
+                    training_command=(
+                        preflight_inputs["resolved_training_command"] or None
+                    ),
+                    training_backend=(
+                        preflight_inputs["resolved_training_backend"] or None
+                    ),
+                    artifact_store_uri=(
+                        preflight_inputs["resolved_artifact_store_uri"] or None
+                    ),
+                    governance_metadata={
+                        "mode": mode,
+                        "base_model_id": base_model_id,
+                        "base_model_admissibility_decision_id": base_model_admissibility_decision_id,
+                        "base_model_ticket_provided": (
+                            base_model_execution_ticket is not None
+                        ),
+                        "dataset_references": dataset_reference_payload,
+                        "dataset_provenance": [
+                            reference["dataset_provenance"]
+                            for reference in dataset_reference_payload
+                        ],
+                        "policy_profile": str(policy_profile or "").strip(),
+                        "trust_level": str(trust_level or "").strip(),
+                        "artifact_store_uri": preflight_inputs[
+                            "resolved_artifact_store_uri"
+                        ],
+                        "trainer_backend": preflight_inputs[
+                            "resolved_training_backend"
+                        ],
+                        "training_config_hash": preflight_inputs[
+                            "training_config_hash"
+                        ],
+                        "output_registration_path": str(
+                            self.settings.model_registry_path,
+                        ),
+                        "audit_journal_enabled": (
+                            self.settings.journal_backend in {"file", "sqlite"}
+                        ),
+                    },
                 )
 
-            run_payload, checkpoint = self.training_core.start_run(
-                model_family=model_family,
-                base_checkpoint=base_checkpoint,
-                dataset_manifests=manifests,
-                dataset_paths=[dataset_paths[dataset_id] for dataset_id in dataset_ids],
-                execution_mode=execution_mode,
-                training_command=training_command,
-            )
+                continuity_state = _load_json(
+                    self.paths.continuity_index,
+                    {
+                        "genesis_checkpoint_id": None,
+                        "parents": {},
+                        "registered_at": utc_now(),
+                    },
+                )
 
-            continuity_state = _load_json(
-                self.paths.continuity_index,
-                {
-                    "genesis_checkpoint_id": None,
-                    "parents": {},
-                    "registered_at": utc_now(),
-                },
-            )
+                parent_id = base_checkpoint or continuity_state.get(
+                    "genesis_checkpoint_id",
+                )
+                if parent_id and not self.state_register.continuity_chain(
+                    parent_id,
+                ):
+                    parent_id = None
 
-            parent_id = base_checkpoint or continuity_state.get(
-                "genesis_checkpoint_id",
-            )
-            if parent_id and not self.state_register.continuity_chain(
-                parent_id,
-            ):
-                parent_id = None
+                self.state_register.register_checkpoint_lineage(
+                    checkpoint_id=checkpoint.checkpoint_id,
+                    parent_checkpoint_id=parent_id,
+                    trace_id=context.trace_id,
+                    metadata={
+                        "model_family": model_family,
+                        "run_id": run_payload["run_id"],
+                        "checkpoint_hash": checkpoint.checkpoint_hash,
+                        "execution_mode": checkpoint.execution_mode,
+                        "artifact_uri": checkpoint.artifact_uri,
+                    },
+                )
 
-            self.state_register.register_checkpoint_lineage(
-                checkpoint_id=checkpoint.checkpoint_id,
-                parent_checkpoint_id=parent_id,
-                trace_id=context.trace_id,
-                metadata={
-                    "model_family": model_family,
-                    "run_id": run_payload["run_id"],
-                    "checkpoint_hash": checkpoint.checkpoint_hash,
-                    "execution_mode": checkpoint.execution_mode,
-                    "artifact_uri": checkpoint.artifact_uri,
-                },
-            )
-            governed_model = None
-            if checkpoint.execution_mode == "actual":
+                if mode == "simulation":
+                    run_payload["mode"] = "simulation"
+                    run_payload["simulation_only"] = True
+                    run_payload["satisfies_production_training_evidence"] = False
+                    self.journal.append(
+                        "simulation_completed",
+                        context.trace_id,
+                        {
+                            "mode": "simulation",
+                            "run_id": run_payload["run_id"],
+                            "checkpoint_id": checkpoint.checkpoint_id,
+                        },
+                    )
+                    return {
+                        "mode": "simulation",
+                        "run": run_payload,
+                        "checkpoint": to_primitive(checkpoint),
+                        "governed_model": None,
+                        "preflight": to_primitive(preflight),
+                    }
+
+                self.journal.append(
+                    "training_completed",
+                    context.trace_id,
+                    {
+                        "mode": "actual_training",
+                        "run_id": run_payload["run_id"],
+                        "checkpoint_id": checkpoint.checkpoint_id,
+                        "checkpoint_hash": checkpoint.checkpoint_hash,
+                    },
+                )
+
                 governed_model = GovernedModelRegistry(
                     self.settings.model_registry_path,
                 ).register(
@@ -1809,23 +2649,90 @@ class SovereignModelServerWorkshop:
                     immutable_identifier=checkpoint.checkpoint_id,
                     metadata={
                         "run_id": run_payload["run_id"],
+                        "base_model_reference": base_model_id,
                         "base_checkpoint": base_checkpoint,
-                        "dataset_ids": list(dataset_ids),
+                        "dataset_references": dataset_reference_payload,
+                        "dataset_provenance": [
+                            reference["dataset_provenance"]
+                            for reference in dataset_reference_payload
+                        ],
+                        "training_config_hash": preflight_inputs[
+                            "training_config_hash"
+                        ],
+                        "artifact_location": checkpoint.artifact_uri,
+                        "policy_profile": str(policy_profile or "").strip(),
+                        "trust_level": str(trust_level or "").strip(),
                         "model_family": model_family,
                     },
-                    trust_level="reviewed",
-                    policy_profile="workshop-fine-tuned-model",
-                    provenance_ref=f"training-run://{run_payload['run_id']}",
+                    trust_level=str(trust_level or "reviewed"),
+                    policy_profile=(
+                        str(policy_profile or "workshop-fine-tuned-model").strip()
+                        or "workshop-fine-tuned-model"
+                    ),
+                    provenance_ref=(
+                        "training-run://"
+                        f"{run_payload['run_id']}/checkpoint/{checkpoint.checkpoint_id}"
+                    ),
                     signer=self.signer,
                 )
+                if (
+                    governed_model.source != checkpoint.artifact_uri
+                    or governed_model.content_hash != checkpoint.checkpoint_hash
+                ):
+                    raise ValueError("checkpoint_registry_binding_failed")
 
-            return {
-                "run": run_payload,
-                "checkpoint": to_primitive(checkpoint),
-                "governed_model": (
-                    to_primitive(governed_model) if governed_model else None
-                ),
-            }
+                contract_state = _load_json(
+                    self.paths.training_artifact_contract,
+                    {"artifacts": []},
+                )
+                contract_state["artifacts"].append(
+                    {
+                        "run_id": run_payload["run_id"],
+                        "checkpoint_id": checkpoint.checkpoint_id,
+                        "model_id": governed_model.model_id,
+                        "artifact_uri": checkpoint.artifact_uri,
+                        "artifact_store_uri": preflight_inputs[
+                            "resolved_artifact_store_uri"
+                        ],
+                        "training_config_hash": preflight_inputs[
+                            "training_config_hash"
+                        ],
+                        "recorded_at": utc_now(),
+                    },
+                )
+                _save_json(self.paths.training_artifact_contract, contract_state)
+
+                self.journal.append(
+                    "checkpoint_registered",
+                    context.trace_id,
+                    {
+                        "run_id": run_payload["run_id"],
+                        "checkpoint_id": checkpoint.checkpoint_id,
+                        "model_id": governed_model.model_id,
+                        "registry_schema_version": governed_model.registry_schema_version,
+                        "signature_status": governed_model.signature_status,
+                    },
+                )
+
+                return {
+                    "mode": "actual_training",
+                    "run": run_payload,
+                    "checkpoint": to_primitive(checkpoint),
+                    "governed_model": to_primitive(governed_model),
+                    "preflight": to_primitive(preflight),
+                }
+            except Exception as exc:  # noqa: BLE001
+                self.journal.append(
+                    "training_failed",
+                    context.trace_id,
+                    {
+                        "mode": mode,
+                        "model_family": model_family,
+                        "reason_code": "training_execution_failed",
+                        "error": str(exc),
+                    },
+                )
+                raise ValueError(f"training_execution_failed:{exc}") from exc
 
         return self._commit_governed_operation(
             context=context,
@@ -2024,10 +2931,25 @@ class SovereignModelServerWorkshop:
             self.paths.training_runs,
             {"runs": [], "checkpoints": []},
         )
+        training_runs = list(training_state.get("runs", []))
+        simulation_runs = [
+            run
+            for run in training_runs
+            if str(run.get("execution_mode", "")).strip() == "simulated"
+        ]
+        actual_runs = [
+            run
+            for run in training_runs
+            if str(run.get("execution_mode", "")).strip() == "actual"
+        ]
+        artifact_contract = _load_json(
+            self.paths.training_artifact_contract,
+            {"artifacts": []},
+        )
         training_modes = sorted(
             {
                 str(item.get("execution_mode", "unknown"))
-                for item in training_state.get("runs", [])
+                for item in training_runs
             },
         )
         report = {
@@ -2035,6 +2957,11 @@ class SovereignModelServerWorkshop:
             "readiness_level": "prototype",
             "training_execution_modes": training_modes,
             "training_is_simulated": "simulated" in training_modes,
+            "simulation_run_count": len(simulation_runs),
+            "actual_training_run_count": len(actual_runs),
+            "production_training_evidence_satisfied": bool(
+                actual_runs and artifact_contract.get("artifacts")
+            ),
             "charter_exists": (
                 self.paths.founding_dir / "server_charter_v1.json"
             ).exists(),
@@ -2050,7 +2977,7 @@ class SovereignModelServerWorkshop:
                 ],
             ),
             "training_runs": len(
-                training_state["runs"],
+                training_runs,
             ),
             "evaluations": len(
                 _load_json(self.paths.evaluations, {"evaluations": []})[

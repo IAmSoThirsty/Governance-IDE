@@ -88,6 +88,9 @@ This repository implements a local-first, offline-capable governance core with:
   - `GET /v1/audit/replay?trace_id=...`
   - `POST /v1/policy/evaluate`
   - `POST /v1/models/execution-ticket`
+  - `POST /v1/models/execution-ticket/inspect`
+  - `POST /v1/workshop/training/preflight`
+  - `POST /v1/workshop/training/run`
 
 ## IDE app catalog
 
@@ -173,11 +176,17 @@ This repository implements a local-first, offline-capable governance core with:
 - Build constitutional datasets:
   - `python -m sovereign_ide.cli workshop-build-datasets ...`
 - Run governed training:
-  - `python -m sovereign_ide.cli workshop-train ...`
-  - Actual fine-tuning is the default and requires a configured trainer:
-    - `python -m sovereign_ide.cli workshop-train ... --execution-mode actual --training-command "python scripts/trainers/trl_sft_trainer.py"`
-  - The trainer receives `--request` and `--output`, reads workshop dataset artifacts, fine-tunes the requested `--model-family`, and returns a checkpoint manifest.
-  - For quick governance-only smoke tests, use `--execution-mode simulated` explicitly.
+  - Preflight (allowed/reason envelope, mode-aware):
+    - `python -m sovereign_ide.cli workshop-train-preflight ...`
+  - Actual governed training (explicit actual flow):
+    - `python -m sovereign_ide.cli workshop-train-actual ... --training-command "python scripts/trainers/trl_sft_trainer.py" --training-backend <backend> --artifact-store-uri <durable-store>`
+  - Simulation smoke-test (explicit simulation flow):
+    - `python -m sovereign_ide.cli workshop-train-simulation ... --simulation-smoke-test`
+  - Compatibility command remains available:
+    - `python -m sovereign_ide.cli workshop-train ... --execution-mode <actual|simulated> --simulation-smoke-test`
+  - Actual training fails closed unless required evidence is present (base model authorization, dataset governance references/provenance, policy profile, trainer backend, durable artifact store, registry path, and audit journal).
+  - Simulation is governance smoke-test only, must be explicitly flagged, is labeled as simulation, does not register a real governed checkpoint, and does not satisfy production training evidence.
+  - The trainer receives `--request` and `--output`, consumes governed training metadata, and returns a completed checkpoint manifest bound to the configured artifact store.
 - Execute shadow evaluation:
   - `python -m sovereign_ide.cli workshop-eval ...`
 - Promote candidate checkpoint with quorum:

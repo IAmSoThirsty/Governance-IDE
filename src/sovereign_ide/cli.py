@@ -12,6 +12,7 @@ from .evaluation import EvaluationHarness
 from .governance import (
     GovernanceRuntime,
     PolicyEngine,
+    PolicyViolation,
     build_decision_signer,
     build_journal,
 )
@@ -500,21 +501,161 @@ def cmd_workshop_build_datasets(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_workshop_train(args: argparse.Namespace) -> int:
+def _workshop_base_model_ticket(args: argparse.Namespace) -> dict[str, Any] | None:
+    ticket_file = str(getattr(args, "base_model_ticket_file", "") or "").strip()
+    if not ticket_file:
+        return None
+    payload = json.loads(Path(ticket_file).resolve().read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("base model ticket file must contain a JSON object")
+    return payload
+
+
+def _workshop_training_denial_reason(reason: str) -> str:
+    normalized = reason
+    for prefix in (
+        "training_preflight_denied:",
+        "mutation_execution_failed:",
+        "training_execution_failed:",
+    ):
+        if normalized.startswith(prefix):
+            normalized = normalized[len(prefix):]
+    return normalized
+
+
+def _execute_workshop_train(
+    args: argparse.Namespace,
+    *,
+    execution_mode: str,
+    simulation_smoke_test: bool,
+) -> int:
     workshop = _build_workshop(args)
     context = _workshop_context(args)
-    base_checkpoint = args.base_checkpoint if args.base_checkpoint else None
-    result = workshop.start_training_run(
+
+    try:
+        result = workshop.start_training_run(
+            context=context,
+            model_family=args.model_family,
+            base_checkpoint=(args.base_checkpoint or None),
+            dataset_ids=_csv_values(args.dataset_ids),
+            quorum_proof=args.quorum_proof,
+            execution_mode=execution_mode,
+            training_command=(args.training_command or None),
+            simulation_smoke_test=simulation_smoke_test,
+            base_model_id=(getattr(args, "base_model_id", "") or None),
+            base_model_execution_ticket=_workshop_base_model_ticket(args),
+            base_model_admissibility_decision_id=(
+                getattr(args, "base_model_admissibility_decision_id", "") or None
+            ),
+            dataset_ref=(getattr(args, "dataset_ref", "") or None),
+            dataset_provenance=(
+                getattr(args, "dataset_provenance", "") or None
+            ),
+            dataset_source_type=(
+                getattr(args, "dataset_source_type", "") or None
+            ),
+            dataset_license=(getattr(args, "dataset_license", "") or None),
+            dataset_hash=(getattr(args, "dataset_hash", "") or None),
+            dataset_immutable_ref=(
+                getattr(args, "dataset_immutable_ref", "") or None
+            ),
+            dataset_immutable_proof=(
+                getattr(args, "dataset_immutable_proof", "") or None
+            ),
+            policy_profile=(getattr(args, "policy_profile", "") or None),
+            trust_level=str(getattr(args, "trust_level", "reviewed") or "reviewed"),
+            artifact_store_uri=(getattr(args, "artifact_store_uri", "") or None),
+            trainer_backend=(getattr(args, "training_backend", "") or None),
+        )
+    except PolicyViolation as exc:
+        _print_json(
+            {
+                "allowed": False,
+                "mode": (
+                    "simulation"
+                    if execution_mode == "simulated"
+                    else "actual_training"
+                ),
+                "reason": _workshop_training_denial_reason(str(exc)),
+            },
+        )
+        return 1
+
+    payload = result.get("payload", {}) if isinstance(result, dict) else {}
+    _print_json(
+        {
+            "allowed": True,
+            "mode": str(payload.get("mode") or "actual_training"),
+            "reason": "ok",
+            "result": result,
+        },
+    )
+    return 0
+
+
+def cmd_workshop_train_preflight(args: argparse.Namespace) -> int:
+    workshop = _build_workshop(args)
+    context = _workshop_context(args)
+    result = workshop.preflight_training_run(
         context=context,
         model_family=args.model_family,
-        base_checkpoint=base_checkpoint,
+        base_checkpoint=(args.base_checkpoint or None),
         dataset_ids=_csv_values(args.dataset_ids),
-        quorum_proof=args.quorum_proof,
         execution_mode=args.execution_mode,
-        training_command=args.training_command or None,
+        simulation_smoke_test=bool(args.simulation_smoke_test),
+        training_command=(args.training_command or None),
+        training_backend=(args.training_backend or None),
+        artifact_store_uri=(args.artifact_store_uri or None),
+        base_model_id=(args.base_model_id or None),
+        base_model_execution_ticket=_workshop_base_model_ticket(args),
+        base_model_admissibility_decision_id=(
+            args.base_model_admissibility_decision_id or None
+        ),
+        dataset_ref=(args.dataset_ref or None),
+        dataset_provenance=(args.dataset_provenance or None),
+        dataset_source_type=(args.dataset_source_type or None),
+        dataset_license=(args.dataset_license or None),
+        dataset_hash=(args.dataset_hash or None),
+        dataset_immutable_ref=(args.dataset_immutable_ref or None),
+        dataset_immutable_proof=(args.dataset_immutable_proof or None),
+        policy_profile=(args.policy_profile or None),
+        trust_level=args.trust_level,
     )
     _print_json(result)
-    return 0
+    return 0 if bool(result.get("allowed")) else 1
+
+
+def cmd_workshop_train(args: argparse.Namespace) -> int:
+    return _execute_workshop_train(
+        args,
+        execution_mode=args.execution_mode,
+        simulation_smoke_test=bool(args.simulation_smoke_test),
+    )
+
+
+def cmd_workshop_train_actual(args: argparse.Namespace) -> int:
+    return _execute_workshop_train(
+        args,
+        execution_mode="actual",
+        simulation_smoke_test=False,
+    )
+
+
+def cmd_workshop_train_simulation(args: argparse.Namespace) -> int:
+    if not bool(args.simulation_smoke_test):
+        _print_json(
+            {
+                "allowed": False,
+                "mode": "simulation",
+                "reason": "simulation_flag_required",
+            },
+        )
+        return 1
+    return _execute_workshop_train(
+        args,
+        execution_mode="simulated",
+        simulation_smoke_test=True,
+    )
 
 
 def cmd_workshop_eval(args: argparse.Namespace) -> int:
@@ -615,6 +756,44 @@ def _add_workshop_common_args(
     parser.add_argument("--classification", default="confidential")
     if include_quorum:
         parser.add_argument("--quorum-proof", required=True)
+
+
+def _add_workshop_training_contract_args(
+    parser: argparse.ArgumentParser,
+    *,
+    include_execution_mode: bool,
+    include_simulation_flag: bool,
+) -> None:
+    parser.add_argument("--model-family", required=True)
+    parser.add_argument("--base-checkpoint", default="")
+    parser.add_argument("--base-model-id", default="")
+    parser.add_argument("--base-model-ticket-file", default="")
+    parser.add_argument("--base-model-admissibility-decision-id", default="")
+    parser.add_argument("--dataset-ids", default="")
+    parser.add_argument("--dataset-ref", default="")
+    parser.add_argument("--dataset-provenance", default="")
+    parser.add_argument("--dataset-source-type", default="")
+    parser.add_argument("--dataset-license", default="")
+    parser.add_argument("--dataset-hash", default="")
+    parser.add_argument("--dataset-immutable-ref", default="")
+    parser.add_argument("--dataset-immutable-proof", default="")
+    parser.add_argument("--policy-profile", default="")
+    parser.add_argument(
+        "--trust-level",
+        default="reviewed",
+        choices=["untrusted", "quarantine", "reviewed", "trusted"],
+    )
+    parser.add_argument("--artifact-store-uri", default="")
+    parser.add_argument("--training-backend", default="")
+    parser.add_argument("--training-command", default="")
+    if include_execution_mode:
+        parser.add_argument(
+            "--execution-mode",
+            choices=("actual", "simulated"),
+            default="actual",
+        )
+    if include_simulation_flag:
+        parser.add_argument("--simulation-smoke-test", action="store_true")
 
 
 def _add_governance_common_args(
@@ -756,18 +935,41 @@ def build_parser() -> argparse.ArgumentParser:
     _add_workshop_common_args(workshop_build, include_quorum=False)
     workshop_build.set_defaults(func=cmd_workshop_build_datasets)
 
+    workshop_train_preflight = subparsers.add_parser("workshop-train-preflight")
+    _add_workshop_common_args(workshop_train_preflight, include_quorum=False)
+    _add_workshop_training_contract_args(
+        workshop_train_preflight,
+        include_execution_mode=True,
+        include_simulation_flag=True,
+    )
+    workshop_train_preflight.set_defaults(func=cmd_workshop_train_preflight)
+
     workshop_train = subparsers.add_parser("workshop-train")
     _add_workshop_common_args(workshop_train, include_quorum=True)
-    workshop_train.add_argument("--model-family", required=True)
-    workshop_train.add_argument("--base-checkpoint", default="")
-    workshop_train.add_argument("--dataset-ids", required=True)
-    workshop_train.add_argument(
-        "--execution-mode",
-        choices=("actual", "simulated"),
-        default="actual",
+    _add_workshop_training_contract_args(
+        workshop_train,
+        include_execution_mode=True,
+        include_simulation_flag=True,
     )
-    workshop_train.add_argument("--training-command", default="")
     workshop_train.set_defaults(func=cmd_workshop_train)
+
+    workshop_train_actual = subparsers.add_parser("workshop-train-actual")
+    _add_workshop_common_args(workshop_train_actual, include_quorum=True)
+    _add_workshop_training_contract_args(
+        workshop_train_actual,
+        include_execution_mode=False,
+        include_simulation_flag=False,
+    )
+    workshop_train_actual.set_defaults(func=cmd_workshop_train_actual)
+
+    workshop_train_simulation = subparsers.add_parser("workshop-train-simulation")
+    _add_workshop_common_args(workshop_train_simulation, include_quorum=True)
+    _add_workshop_training_contract_args(
+        workshop_train_simulation,
+        include_execution_mode=False,
+        include_simulation_flag=True,
+    )
+    workshop_train_simulation.set_defaults(func=cmd_workshop_train_simulation)
 
     workshop_eval = subparsers.add_parser("workshop-eval")
     _add_workshop_common_args(workshop_eval, include_quorum=False)

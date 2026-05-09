@@ -52,9 +52,26 @@ Reference deployment artifacts:
 ## Fine-Tuning Requirement
 
 Simulation is allowed only for local governance smoke tests. A production
-release must use `--execution-mode actual` or the default workshop training
-mode, and the configured trainer must produce a completed checkpoint manifest
-with an artifact URI and checkpoint hash.
+release must use actual governed training and pass training preflight before
+run start. Preflight is fail-closed and requires:
+
+- registered base model
+- base model execution ticket or admissibility decision reference
+- dataset reference (`dataset_id` or `dataset_ref`)
+- dataset provenance and source type
+- dataset license where applicable
+- dataset hash or immutable reference for governed training
+- policy profile
+- configured trainer backend
+- durable artifact store configuration
+- writable output checkpoint registration path
+- append-only audit journal availability
+
+Mutable dataset references are denied for `reviewed`/`trusted` training unless
+immutable proof is present.
+
+The configured trainer must produce a completed checkpoint manifest with an
+artifact URI and checkpoint hash.
 
 The included TRL/PEFT trainer template is a runnable integration point, not a
 claim that a model has been trained. The release is not model-server ready
@@ -63,9 +80,13 @@ store have been wired and a governed checkpoint has passed shadow evaluation
 and promotion.
 
 When `SOVEREIGN_TRAINING_ARTIFACT_STORE` is configured, actual training output
-must report a durable artifact URI under that store. Local `file://` outputs are
-valid only for local actual-training development, never for production release
-readiness.
+must report a durable artifact URI under that store and remain bindable to the
+governed model registry entry. In production/rehearsal contexts, local/temp-only
+artifact stores are denied.
+
+Simulation runs must remain explicitly flagged smoke tests, emit
+simulation-specific audit events, and never satisfy production training
+evidence.
 
 ## Model Intake And Execution
 
@@ -85,7 +106,8 @@ timestamps, ticket purpose, signer type, and signature. Ticket verification is
 fail-closed for tampered payloads, invalid signatures, and expired tickets.
 
 Fine-tuned checkpoints from actual training are registered as new governed
-models and signed through the signer abstraction.
+models and signed through the signer abstraction. Raw checkpoint artifacts are
+not admissible without governed checkpoint registration.
 
 ## Signing And Storage
 

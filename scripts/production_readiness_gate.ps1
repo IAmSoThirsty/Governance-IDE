@@ -201,6 +201,8 @@ function Assert-ReleaseManifest {
 $repoRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $repoRoot
 
+$rehearsalOverride = $AllowLocalEnvFile -or $AllowLocalImage -or $AllowMissingReleaseManifest
+
 Assert-ProductionEnvContract
 Assert-ReleaseManifest
 
@@ -264,4 +266,8 @@ if (-not $SkipContainerSmoke) {
     )
 }
 
-Write-Host "[production] Readiness gate passed"
+if ($rehearsalOverride) {
+    Write-Host "[production] Rehearsal override gate passed (no production-readiness claim)"
+} else {
+    Write-Host "[production] Readiness gate passed"
+}

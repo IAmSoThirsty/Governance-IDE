@@ -22,6 +22,83 @@ from peft import LoraConfig
 from trl import SFTConfig, SFTTrainer
 
 
+def _require_non_empty(value: object, field_name: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        raise ValueError(f"{field_name} is required")
+    return text
+
+
+def _validate_governed_training_request(request: dict) -> dict:
+    governance = request.get("governance_metadata")
+    if not isinstance(governance, dict):
+        raise ValueError("governance_metadata is required")
+
+    if _require_non_empty(governance.get("mode"), "governance_metadata.mode") != "actual_training":
+        raise ValueError("trainer accepts only governed actual_training mode")
+
+    required_fields = (
+        "base_model_id",
+        "policy_profile",
+        "trust_level",
+        "training_config_hash",
+        "artifact_store_uri",
+        "trainer_backend",
+        "output_registration_path",
+    )
+    for field_name in required_fields:
+        _require_non_empty(
+            governance.get(field_name),
+            f"governance_metadata.{field_name}",
+        )
+
+    dataset_references = governance.get("dataset_references")
+    if not isinstance(dataset_references, list) or not dataset_references:
+        raise ValueError("governance_metadata.dataset_references is required")
+
+    for index, reference in enumerate(dataset_references):
+        if not isinstance(reference, dict):
+            raise ValueError(
+                f"governance_metadata.dataset_references[{index}] must be an object",
+            )
+        for required in (
+            "dataset_id",
+            "dataset_ref",
+            "dataset_provenance",
+            "dataset_source_type",
+            "dataset_license",
+        ):
+            _require_non_empty(
+                reference.get(required),
+                f"dataset_references[{index}].{required}",
+            )
+        if not str(reference.get("dataset_hash", "")).strip() and not str(
+            reference.get("dataset_immutable_ref", ""),
+        ).strip():
+            raise ValueError(
+                "dataset_references entries require dataset_hash "
+                "or dataset_immutable_ref",
+            )
+
+    if not bool(governance.get("audit_journal_enabled", False)):
+        raise ValueError("governance_metadata.audit_journal_enabled must be true")
+
+    top_level_store = _require_non_empty(
+        request.get("artifact_store_uri"),
+        "artifact_store_uri",
+    )
+    governance_store = _require_non_empty(
+        governance.get("artifact_store_uri"),
+        "governance_metadata.artifact_store_uri",
+    )
+    if top_level_store != governance_store:
+        raise ValueError(
+            "artifact_store_uri must match governance_metadata.artifact_store_uri",
+        )
+
+    return governance
+
+
 def _load_records(dataset_paths: list[str]) -> list[dict[str, str]]:
     records: list[dict[str, str]] = []
     for dataset_path in dataset_paths:
@@ -73,6 +150,7 @@ def main() -> int:
     args = parser.parse_args()
 
     request = json.loads(Path(args.request).read_text(encoding="utf-8"))
+    governance = _validate_governed_training_request(request)
     output_dir = Path(request["output_dir"]).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     artifact_store_uri = str(request.get("artifact_store_uri") or "").strip()
@@ -133,6 +211,17 @@ def main() -> int:
         "artifact_uri": artifact_uri,
         "artifact_store_uri": artifact_store_uri or None,
         "checkpoint_hash": _sha256_tree(output_dir),
+        "governance": {
+            "mode": governance["mode"],
+            "base_model_id": governance["base_model_id"],
+            "policy_profile": governance["policy_profile"],
+            "trust_level": governance["trust_level"],
+            "training_config_hash": governance["training_config_hash"],
+            "dataset_refs": [
+                str(reference.get("dataset_ref", "")).strip()
+                for reference in governance["dataset_references"]
+            ],
+        },
     }
     Path(args.output).write_text(
         json.dumps(result, indent=2),

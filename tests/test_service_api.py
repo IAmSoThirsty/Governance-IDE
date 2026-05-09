@@ -17,7 +17,8 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from sovereign_ide.config import get_settings  # noqa: E402
-from sovereign_ide.governance import HashChainJournal  # noqa: E402
+from sovereign_ide.governance import HashChainJournal, build_journal  # noqa: E402
+from sovereign_ide.models import GovernanceContext, new_id  # noqa: E402
 from sovereign_ide.model_registry import GovernedModelRegistry  # noqa: E402
 from sovereign_ide.service import (  # noqa: E402
     build_execution_ticket,
@@ -25,6 +26,7 @@ from sovereign_ide.service import (  # noqa: E402
     make_handler,
     verify_execution_ticket,
 )
+from sovereign_ide.workshop import SovereignModelServerWorkshop  # noqa: E402
 
 try:  # pragma: no cover - optional dependency in local dev
     from cryptography.hazmat.primitives import serialization
@@ -203,6 +205,71 @@ class ServiceApiTests(unittest.TestCase):
             json.dumps(state, indent=2),
             encoding="utf-8",
         )
+
+    def _workshop_context(self, actor: str, roles: tuple[str, ...]) -> GovernanceContext:
+        return GovernanceContext(
+            trace_id=new_id("trace"),
+            actor_id=actor,
+            actor_roles=roles,
+            tenant="tenant1",
+            trust_domain="domain1",
+            workspace_root=str(self.root),
+            classification="confidential",
+            policy_pack_version="1.0.0",
+        )
+
+    def _prepare_workshop_dataset_ids(self) -> tuple[str, ...]:
+        docs_dir = self.root / "docs"
+        docs_dir.mkdir(parents=True, exist_ok=True)
+        (docs_dir / "constitutional_a.txt").write_text(
+            "containment quorum continuity identity provenance",
+            encoding="utf-8",
+        )
+        (docs_dir / "constitutional_b.txt").write_text(
+            "directness refusal repair adversarial governance",
+            encoding="utf-8",
+        )
+
+        workshop = SovereignModelServerWorkshop(workspace_root=self.root)
+        workshop.bootstrap_founding_charter(
+            context=self._workshop_context(
+                actor="authority",
+                roles=("trust_administrator", "release_authority"),
+            ),
+            quorum_proof="founding-quorum",
+        )
+        workshop.admit_corpus_artifacts(
+            context=self._workshop_context(
+                actor="data-steward",
+                roles=("data_steward", "model_steward"),
+            ),
+            artifact_paths=(
+                str(docs_dir / "constitutional_a.txt"),
+                str(docs_dir / "constitutional_b.txt"),
+            ),
+            artifact_type="constitutional_doc",
+            source_class="curated",
+            trust_class="reviewed",
+        )
+        built = workshop.build_constitutional_datasets(
+            context=self._workshop_context(
+                actor="model-steward",
+                roles=("model_steward", "data_steward"),
+            ),
+        )
+        return tuple(built["payload"]["dataset_ids"])
+
+    def _workshop_replay(self, trace_id: str) -> list[dict]:
+        settings = get_settings(self.root)
+        journal = build_journal(
+            settings,
+            path=(
+                self.root / "state" / "workshop" / "workshop_journal.jsonl"
+                if settings.journal_backend == "file"
+                else self.root / "state" / "workshop" / "workshop_events.sqlite3"
+            ),
+        )
+        return journal.replay_trace(trace_id)
 
     def _register_reviewed_model(self) -> str:
         settings = get_settings(self.root)
@@ -629,6 +696,108 @@ class ServiceApiTests(unittest.TestCase):
         self.assertEqual(status_expired, 403)
         self.assertFalse(response_expired["allowed"])
         self.assertEqual(response_expired["reason"], "ticket_expired")
+
+    def test_workshop_preflight_api_enforces_simulation_flag_with_journal_evidence(self) -> None:
+        dataset_ids = self._prepare_workshop_dataset_ids()
+
+        denied_trace = "trace_workshop_preflight_denied"
+        status_denied, denied = self._post_json_with_status(
+            "/v1/workshop/training/preflight",
+            {
+                "model_family": "project-ai-workshop-sim",
+                "dataset_ids": list(dataset_ids),
+                "execution_mode": "simulated",
+                "simulation_smoke_test": False,
+                "context": {
+                    "trace_id": denied_trace,
+                    "actor_id": "trainer",
+                    "actor_roles": ["model_steward", "release_authority"],
+                    "tenant": "tenant1",
+                    "trust_domain": "domain1",
+                    "classification": "confidential",
+                },
+            },
+        )
+        self.assertEqual(status_denied, 403)
+        self.assertFalse(denied["allowed"])
+        self.assertEqual(denied["mode"], "simulation")
+        self.assertEqual(denied["reason"], "simulation_flag_required")
+
+        denied_entries = self._workshop_replay(denied_trace)
+        self.assertTrue(
+            any(
+                entry["record_type"] == "training_preflight_denied"
+                for entry in denied_entries
+            ),
+        )
+
+        allowed_trace = "trace_workshop_preflight_allowed"
+        status_allowed, allowed = self._post_json_with_status(
+            "/v1/workshop/training/preflight",
+            {
+                "model_family": "project-ai-workshop-sim",
+                "dataset_ids": list(dataset_ids),
+                "execution_mode": "simulated",
+                "simulation_smoke_test": True,
+                "context": {
+                    "trace_id": allowed_trace,
+                    "actor_id": "trainer",
+                    "actor_roles": ["model_steward", "release_authority"],
+                    "tenant": "tenant1",
+                    "trust_domain": "domain1",
+                    "classification": "confidential",
+                },
+            },
+        )
+        self.assertEqual(status_allowed, 200)
+        self.assertTrue(allowed["allowed"])
+        self.assertEqual(allowed["mode"], "simulation")
+        self.assertEqual(allowed["reason"], "ok")
+
+        allowed_entries = self._workshop_replay(allowed_trace)
+        self.assertTrue(
+            any(
+                entry["record_type"] == "training_preflight_allowed"
+                for entry in allowed_entries
+            ),
+        )
+
+    def test_workshop_training_run_api_returns_simulation_mode_and_no_checkpoint_registration(self) -> None:
+        dataset_ids = self._prepare_workshop_dataset_ids()
+        trace_id = "trace_workshop_run_simulation"
+
+        status, response = self._post_json_with_status(
+            "/v1/workshop/training/run",
+            {
+                "model_family": "project-ai-workshop-sim",
+                "dataset_ids": list(dataset_ids),
+                "execution_mode": "simulated",
+                "simulation_smoke_test": True,
+                "quorum_proof": "train-quorum",
+                "context": {
+                    "trace_id": trace_id,
+                    "actor_id": "trainer",
+                    "actor_roles": ["model_steward", "release_authority"],
+                    "tenant": "tenant1",
+                    "trust_domain": "domain1",
+                    "classification": "confidential",
+                },
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(response["allowed"])
+        self.assertEqual(response["mode"], "simulation")
+        self.assertEqual(response["reason"], "ok")
+
+        payload = response["result"]["payload"]
+        self.assertEqual(payload["mode"], "simulation")
+        self.assertIsNone(payload["governed_model"])
+
+        entries = self._workshop_replay(trace_id)
+        record_types = [entry["record_type"] for entry in entries]
+        self.assertIn("simulation_started", record_types)
+        self.assertIn("simulation_completed", record_types)
+        self.assertNotIn("checkpoint_registered", record_types)
 
     def test_service_token_protects_ready_and_api(self) -> None:
         with patch.dict(os.environ, {"SOVEREIGN_SERVICE_TOKEN": "secret"}):

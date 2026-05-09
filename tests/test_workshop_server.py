@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 import sys
@@ -14,6 +15,8 @@ if str(SRC) not in sys.path:
 
 from sovereign_ide.config import get_settings  # noqa: E402
 from sovereign_ide.models import GovernanceContext, new_id  # noqa: E402
+from sovereign_ide.model_registry import GovernedModelRegistry  # noqa: E402
+from sovereign_ide.service import request_execution_ticket  # noqa: E402
 from sovereign_ide.workshop import (  # noqa: E402
     ContainmentDecision,
     PolicyViolation,
@@ -118,6 +121,65 @@ class WorkshopServerTests(unittest.TestCase):
         )
         return tuple(build_result["payload"]["dataset_ids"])
 
+    def _register_base_model(self, *, trust_level: str = "reviewed") -> str:
+        settings = get_settings(self.root)
+        registry = GovernedModelRegistry(settings.model_registry_path)
+        base_model_path = self.root / "base_model.bin"
+        base_model_path.write_text("base-weights", encoding="utf-8")
+        record = registry.register(
+            source_type="local_path",
+            source=str(base_model_path),
+            license="test-license",
+            content_hash=GovernedModelRegistry.hash_local_path(base_model_path),
+            immutable_identifier="base-model:sha256",
+            metadata={"family": "base"},
+            trust_level=trust_level,
+            policy_profile="default-model-policy",
+            provenance_ref="provenance://base_model.bin",
+        )
+        return record.model_id
+
+    def _issue_base_model_ticket(self, model_id: str) -> tuple[dict, str]:
+        response = request_execution_ticket(
+            self.root,
+            context=self._context(
+                actor="steward",
+                roles=("model_steward",),
+            ),
+            model_id=model_id,
+            ticket_purpose="fine_tuning_base_model",
+            ticket_ttl_seconds=900,
+        )
+        self.assertTrue(response["allowed"], msg=response)
+        decision = response.get("decision") or {}
+        decision_id = str(decision.get("decision_id") or "")
+        return response["payload"]["execution_ticket"], decision_id
+
+    def _actual_training_kwargs(
+        self,
+        *,
+        dataset_ids: tuple[str, ...],
+        base_model_id: str,
+        base_ticket: dict,
+        **overrides: object,
+    ) -> dict:
+        kwargs: dict[str, object] = {
+            "model_family": "project-ai-constitutional-actual",
+            "base_checkpoint": None,
+            "dataset_ids": dataset_ids,
+            "quorum_proof": "train-quorum",
+            "execution_mode": "actual",
+            "training_command": '"python" "-V"',
+            "base_model_id": base_model_id,
+            "base_model_execution_ticket": base_ticket,
+            "policy_profile": "workshop-fine-tuned-model",
+            "trust_level": "reviewed",
+            "artifact_store_uri": "https://huggingface.co/example/model",
+            "trainer_backend": "huggingface-jobs",
+        }
+        kwargs.update(overrides)
+        return kwargs
+
     def _train_until_passed_eval(
         self,
         dataset_ids: tuple[str, ...],
@@ -133,6 +195,7 @@ class WorkshopServerTests(unittest.TestCase):
                 dataset_ids=dataset_ids,
                 quorum_proof="train-quorum",
                 execution_mode="simulated",
+                simulation_smoke_test=True,
             )
             checkpoint_id = train_result["payload"]["checkpoint"][
                 "checkpoint_id"
@@ -201,6 +264,7 @@ class WorkshopServerTests(unittest.TestCase):
             dataset_ids=dataset_ids,
             quorum_proof="train-quorum",
             execution_mode="simulated",
+            simulation_smoke_test=True,
         )
 
         self.assertEqual(
@@ -211,13 +275,253 @@ class WorkshopServerTests(unittest.TestCase):
             train_result["payload"]["run"]["execution_mode"],
             "simulated",
         )
+        self.assertEqual(train_result["payload"]["mode"], "simulation")
+        self.assertIsNone(train_result["payload"]["governed_model"])
         report = self.workshop.export_workshop_report()
         self.assertEqual(report["readiness_level"], "prototype")
         self.assertTrue(report["training_is_simulated"])
         self.assertIn("simulated", report["training_execution_modes"])
 
+    def test_simulation_requires_explicit_smoke_test_flag(self) -> None:
+        dataset_ids = self._bootstrap_and_prepare_datasets()
+        with self.assertRaises(PolicyViolation) as raised:
+            self.workshop.start_training_run(
+                context=self._context(
+                    actor="trainer",
+                    roles=("model_steward", "release_authority"),
+                ),
+                model_family="project-ai-constitutional-simulated",
+                base_checkpoint=None,
+                dataset_ids=dataset_ids,
+                quorum_proof="train-quorum",
+                execution_mode="simulated",
+                simulation_smoke_test=False,
+            )
+        self.assertIn("simulation_flag_required", str(raised.exception))
+
+    def test_simulation_writes_audit_events_and_not_checkpoint_registered(self) -> None:
+        dataset_ids = self._bootstrap_and_prepare_datasets()
+        context = self._context(
+            actor="trainer",
+            roles=("model_steward", "release_authority"),
+        )
+        result = self.workshop.start_training_run(
+            context=context,
+            model_family="project-ai-constitutional-simulated",
+            base_checkpoint=None,
+            dataset_ids=dataset_ids,
+            quorum_proof="train-quorum",
+            execution_mode="simulated",
+            simulation_smoke_test=True,
+        )
+        self.assertEqual(result["payload"]["mode"], "simulation")
+        self.assertIsNone(result["payload"]["governed_model"])
+
+        replay = self.workshop.runtime.replay_trace(context.trace_id)
+        record_types = {entry["record_type"] for entry in replay}
+        self.assertIn("training_preflight_allowed", record_types)
+        self.assertIn("simulation_started", record_types)
+        self.assertIn("simulation_completed", record_types)
+        self.assertNotIn("checkpoint_registered", record_types)
+
+    def test_actual_training_preflight_allows_with_required_evidence(self) -> None:
+        dataset_ids = self._bootstrap_and_prepare_datasets()
+        base_model_id = self._register_base_model()
+        base_ticket, _ = self._issue_base_model_ticket(base_model_id)
+
+        preflight = self.workshop.preflight_training_run(
+            context=self._context(
+                actor="trainer",
+                roles=("model_steward", "release_authority"),
+            ),
+            model_family="project-ai-constitutional-actual",
+            base_checkpoint=None,
+            dataset_ids=dataset_ids,
+            execution_mode="actual",
+            simulation_smoke_test=False,
+            training_command='"python" "-V"',
+            training_backend="huggingface-jobs",
+            artifact_store_uri="https://huggingface.co/example/model",
+            base_model_id=base_model_id,
+            base_model_execution_ticket=base_ticket,
+            base_model_admissibility_decision_id=None,
+            dataset_ref=None,
+            dataset_provenance=None,
+            dataset_source_type=None,
+            dataset_license=None,
+            dataset_hash=None,
+            dataset_immutable_ref=None,
+            dataset_immutable_proof=None,
+            policy_profile="workshop-fine-tuned-model",
+            trust_level="reviewed",
+        )
+        self.assertTrue(preflight["allowed"], msg=preflight)
+        self.assertEqual(preflight["mode"], "actual_training")
+        self.assertEqual(preflight["reason"], "ok")
+
+    def test_actual_training_denied_without_registered_base_model(self) -> None:
+        dataset_ids = self._bootstrap_and_prepare_datasets()
+        with self.assertRaises(PolicyViolation) as raised:
+            self.workshop.start_training_run(
+                context=self._context(
+                    actor="trainer",
+                    roles=("model_steward", "release_authority"),
+                ),
+                **self._actual_training_kwargs(
+                    dataset_ids=dataset_ids,
+                    base_model_id="",
+                    base_ticket={},
+                    base_model_execution_ticket=None,
+                ),
+            )
+        self.assertIn("base_model_missing", str(raised.exception))
+
+    def test_actual_training_denied_without_dataset_reference(self) -> None:
+        base_model_id = self._register_base_model()
+        base_ticket, _ = self._issue_base_model_ticket(base_model_id)
+        with self.assertRaises(PolicyViolation) as raised:
+            self.workshop.start_training_run(
+                context=self._context(
+                    actor="trainer",
+                    roles=("model_steward", "release_authority"),
+                ),
+                **self._actual_training_kwargs(
+                    dataset_ids=tuple(),
+                    base_model_id=base_model_id,
+                    base_ticket=base_ticket,
+                ),
+            )
+        self.assertIn("dataset_reference_missing", str(raised.exception))
+
+    def test_actual_training_denied_without_dataset_provenance(self) -> None:
+        dataset_ids = self._bootstrap_and_prepare_datasets()
+        base_model_id = self._register_base_model()
+        base_ticket, _ = self._issue_base_model_ticket(base_model_id)
+
+        dataset_index = json.loads(self.workshop.paths.dataset_index.read_text(encoding="utf-8"))
+        dataset_path = Path(dataset_index["datasets"][0]["path"])
+        payload = json.loads(dataset_path.read_text(encoding="utf-8"))
+        payload.setdefault("governance", {})["provenance_ref"] = ""
+        dataset_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        dataset_index["datasets"][0]["dataset_provenance"] = ""
+        self.workshop.paths.dataset_index.write_text(
+            json.dumps(dataset_index, indent=2),
+            encoding="utf-8",
+        )
+
+        with self.assertRaises(PolicyViolation) as raised:
+            self.workshop.start_training_run(
+                context=self._context(
+                    actor="trainer",
+                    roles=("model_steward", "release_authority"),
+                ),
+                **self._actual_training_kwargs(
+                    dataset_ids=dataset_ids,
+                    base_model_id=base_model_id,
+                    base_ticket=base_ticket,
+                ),
+            )
+        self.assertIn("dataset_provenance_missing", str(raised.exception))
+
+    def test_actual_training_denied_without_artifact_store(self) -> None:
+        dataset_ids = self._bootstrap_and_prepare_datasets()
+        base_model_id = self._register_base_model()
+        base_ticket, _ = self._issue_base_model_ticket(base_model_id)
+
+        with self.assertRaises(PolicyViolation) as raised:
+            self.workshop.start_training_run(
+                context=self._context(
+                    actor="trainer",
+                    roles=("model_steward", "release_authority"),
+                ),
+                **self._actual_training_kwargs(
+                    dataset_ids=dataset_ids,
+                    base_model_id=base_model_id,
+                    base_ticket=base_ticket,
+                    artifact_store_uri="",
+                ),
+            )
+        self.assertIn("artifact_store_missing", str(raised.exception))
+
+    def test_actual_training_denied_without_policy_profile(self) -> None:
+        dataset_ids = self._bootstrap_and_prepare_datasets()
+        base_model_id = self._register_base_model()
+        base_ticket, _ = self._issue_base_model_ticket(base_model_id)
+
+        with self.assertRaises(PolicyViolation) as raised:
+            self.workshop.start_training_run(
+                context=self._context(
+                    actor="trainer",
+                    roles=("model_steward", "release_authority"),
+                ),
+                **self._actual_training_kwargs(
+                    dataset_ids=dataset_ids,
+                    base_model_id=base_model_id,
+                    base_ticket=base_ticket,
+                    policy_profile="",
+                ),
+            )
+        self.assertIn("policy_profile_missing", str(raised.exception))
+
+    def test_actual_training_denied_when_mutable_dataset_lacks_immutable_proof(self) -> None:
+        dataset_ids = self._bootstrap_and_prepare_datasets()
+        base_model_id = self._register_base_model()
+        base_ticket, _ = self._issue_base_model_ticket(base_model_id)
+
+        dataset_index = json.loads(self.workshop.paths.dataset_index.read_text(encoding="utf-8"))
+        dataset_path = Path(dataset_index["datasets"][0]["path"])
+        payload = json.loads(dataset_path.read_text(encoding="utf-8"))
+        governance = payload.setdefault("governance", {})
+        governance["source_type"] = "external_registry"
+        governance["mutable_reference"] = True
+        governance["immutable_proof"] = ""
+        dataset_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        dataset_index["datasets"][0]["dataset_source_type"] = "external_registry"
+        dataset_index["datasets"][0]["mutable_reference"] = True
+        dataset_index["datasets"][0]["immutable_proof"] = ""
+        self.workshop.paths.dataset_index.write_text(
+            json.dumps(dataset_index, indent=2),
+            encoding="utf-8",
+        )
+
+        with self.assertRaises(PolicyViolation) as raised:
+            self.workshop.start_training_run(
+                context=self._context(
+                    actor="trainer",
+                    roles=("model_steward", "release_authority"),
+                ),
+                **self._actual_training_kwargs(
+                    dataset_ids=dataset_ids,
+                    base_model_id=base_model_id,
+                    base_ticket=base_ticket,
+                ),
+            )
+        self.assertIn("mutable_dataset_requires_immutable_proof", str(raised.exception))
+
+    def test_actual_training_denied_when_base_model_lacks_admissibility(self) -> None:
+        dataset_ids = self._bootstrap_and_prepare_datasets()
+        base_model_id = self._register_base_model(trust_level="quarantine")
+
+        with self.assertRaises(PolicyViolation) as raised:
+            self.workshop.start_training_run(
+                context=self._context(
+                    actor="trainer",
+                    roles=("model_steward", "release_authority"),
+                ),
+                **self._actual_training_kwargs(
+                    dataset_ids=dataset_ids,
+                    base_model_id=base_model_id,
+                    base_ticket={},
+                    base_model_execution_ticket=None,
+                    base_model_admissibility_decision_id="decision_fake",
+                ),
+            )
+        self.assertIn("base_model_insufficient_trust", str(raised.exception))
+
     def test_actual_training_requires_configured_trainer(self) -> None:
         dataset_ids = self._bootstrap_and_prepare_datasets()
+        base_model_id = self._register_base_model()
+        base_ticket, _ = self._issue_base_model_ticket(base_model_id)
         with self.assertRaises(PolicyViolation) as raised:
             self.workshop.start_training_run(
                 context=self._context(
@@ -228,11 +532,21 @@ class WorkshopServerTests(unittest.TestCase):
                 base_checkpoint=None,
                 dataset_ids=dataset_ids,
                 quorum_proof="train-quorum",
+                execution_mode="actual",
+                training_command='"python" "-V"',
+                base_model_id=base_model_id,
+                base_model_execution_ticket=base_ticket,
+                policy_profile="workshop-fine-tuned-model",
+                trust_level="reviewed",
+                artifact_store_uri="https://huggingface.co/example/model",
+                trainer_backend="",
             )
-        self.assertIn("actual training requires", str(raised.exception))
+        self.assertIn("trainer_backend_missing", str(raised.exception))
 
     def test_actual_training_uses_trainer_output_manifest(self) -> None:
         dataset_ids = self._bootstrap_and_prepare_datasets()
+        base_model_id = self._register_base_model()
+        base_ticket, _ = self._issue_base_model_ticket(base_model_id)
         trainer_path = self.root / "trainer_stub.py"
         trainer_path.write_text(
             "\n".join(
@@ -248,10 +562,12 @@ class WorkshopServerTests(unittest.TestCase):
                     "request = json.loads(Path(args.request).read_text())",
                     "material = json.dumps(request, sort_keys=True)",
                     "digest = hashlib.sha256(material.encode()).hexdigest()",
+                    "artifact_store = request['artifact_store_uri']",
                     "Path(args.output).write_text(json.dumps({",
                     "    'status': 'completed',",
                     "    'checkpoint_id': 'checkpoint_actual_test',",
-                    "    'artifact_uri': 'file://' + request['output_dir'],",
+                    "    'artifact_uri': artifact_store,",
+                    "    'artifact_store_uri': artifact_store,",
                     "    'checkpoint_hash': digest,",
                     "}))",
                 ],
@@ -259,17 +575,25 @@ class WorkshopServerTests(unittest.TestCase):
             encoding="utf-8",
         )
 
+        context = self._context(
+            actor="trainer",
+            roles=("model_steward", "release_authority"),
+        )
+
         train_result = self.workshop.start_training_run(
-            context=self._context(
-                actor="trainer",
-                roles=("model_steward", "release_authority"),
-            ),
+            context=context,
             model_family="project-ai-constitutional-actual",
             base_checkpoint=None,
             dataset_ids=dataset_ids,
             quorum_proof="train-quorum",
             execution_mode="actual",
             training_command=f'"{sys.executable}" "{trainer_path}"',
+            base_model_id=base_model_id,
+            base_model_execution_ticket=base_ticket,
+            policy_profile="workshop-fine-tuned-model",
+            trust_level="reviewed",
+            artifact_store_uri="https://huggingface.co/example/model-actual",
+            trainer_backend="huggingface-jobs",
         )
 
         self.assertEqual(train_result["payload"]["run"]["status"], "completed")
@@ -290,9 +614,25 @@ class WorkshopServerTests(unittest.TestCase):
             train_result["payload"]["governed_model"]["source_type"],
             "fine_tuned_checkpoint",
         )
+        governed_model = train_result["payload"]["governed_model"]
+        self.assertEqual(
+            governed_model["metadata"]["base_model_reference"],
+            base_model_id,
+        )
+        self.assertTrue(governed_model["metadata"]["dataset_references"])
+        self.assertTrue(governed_model["metadata"]["training_config_hash"])
+
+        replay = self.workshop.runtime.replay_trace(context.trace_id)
+        record_types = [entry["record_type"] for entry in replay]
+        self.assertIn("training_preflight_allowed", record_types)
+        self.assertIn("training_started", record_types)
+        self.assertIn("training_completed", record_types)
+        self.assertIn("checkpoint_registered", record_types)
 
     def test_actual_training_rejects_local_artifact_when_store_configured(self) -> None:
         dataset_ids = self._bootstrap_and_prepare_datasets()
+        base_model_id = self._register_base_model()
+        base_ticket, _ = self._issue_base_model_ticket(base_model_id)
         trainer_path = self.root / "local_artifact_trainer.py"
         trainer_path.write_text(
             "\n".join(
@@ -336,11 +676,18 @@ class WorkshopServerTests(unittest.TestCase):
                     quorum_proof="train-quorum",
                     execution_mode="actual",
                     training_command=f'"{sys.executable}" "{trainer_path}"',
+                    base_model_id=base_model_id,
+                    base_model_execution_ticket=base_ticket,
+                    policy_profile="workshop-fine-tuned-model",
+                    trust_level="reviewed",
+                    trainer_backend="huggingface-jobs",
                 )
         self.assertIn("durable storage", str(raised.exception))
 
     def test_actual_training_request_carries_artifact_store_contract(self) -> None:
         dataset_ids = self._bootstrap_and_prepare_datasets()
+        base_model_id = self._register_base_model()
+        base_ticket, _ = self._issue_base_model_ticket(base_model_id)
         trainer_path = self.root / "durable_artifact_trainer.py"
         trainer_path.write_text(
             "\n".join(
@@ -386,6 +733,10 @@ class WorkshopServerTests(unittest.TestCase):
                 quorum_proof="train-quorum",
                 execution_mode="actual",
                 training_command=f'"{sys.executable}" "{trainer_path}"',
+                base_model_id=base_model_id,
+                base_model_execution_ticket=base_ticket,
+                policy_profile="workshop-fine-tuned-model",
+                trust_level="reviewed",
             )
 
         self.assertEqual(
@@ -400,6 +751,50 @@ class WorkshopServerTests(unittest.TestCase):
             train_result["payload"]["checkpoint"]["artifact_uri"],
             "https://huggingface.co/example/model",
         )
+
+    def test_failed_actual_training_records_failure_and_skips_checkpoint_registration(self) -> None:
+        dataset_ids = self._bootstrap_and_prepare_datasets()
+        base_model_id = self._register_base_model()
+        base_ticket, _ = self._issue_base_model_ticket(base_model_id)
+        trainer_path = self.root / "failing_trainer.py"
+        trainer_path.write_text(
+            "\n".join(
+                [
+                    "import sys",
+                    "raise SystemExit(2)",
+                ],
+            ),
+            encoding="utf-8",
+        )
+
+        context = self._context(
+            actor="trainer",
+            roles=("model_steward", "release_authority"),
+        )
+        with self.assertRaises(PolicyViolation) as raised:
+            self.workshop.start_training_run(
+                context=context,
+                **self._actual_training_kwargs(
+                    dataset_ids=dataset_ids,
+                    base_model_id=base_model_id,
+                    base_ticket=base_ticket,
+                    training_command=f'"{sys.executable}" "{trainer_path}"',
+                ),
+            )
+        self.assertIn("training_execution_failed", str(raised.exception))
+
+        replay = self.workshop.runtime.replay_trace(context.trace_id)
+        record_types = [entry["record_type"] for entry in replay]
+        self.assertIn("training_failed", record_types)
+        self.assertNotIn("checkpoint_registered", record_types)
+
+        registry = GovernedModelRegistry(get_settings(self.root).model_registry_path)
+        fine_tuned_entries = [
+            model
+            for model in registry.list()
+            if model.source_type == "fine_tuned_checkpoint"
+        ]
+        self.assertEqual(fine_tuned_entries, [])
 
     def test_promotion_denied_without_quorum(self) -> None:
         dataset_ids = self._bootstrap_and_prepare_datasets()
