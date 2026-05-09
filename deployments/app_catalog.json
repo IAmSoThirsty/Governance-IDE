@@ -46,7 +46,7 @@
         },
         {
           "type": "api",
-          "ref": "/health,/ready,/v1/apps,/v1/models,/v1/policy,/v1/audit/replay,/v1/policy/evaluate,/v1/models/execution-ticket"
+          "ref": "/health,/ready,/v1/apps,/v1/models,/v1/policy,/v1/evidence/status,/v1/audit/events,/v1/audit/replay,/v1/policy/evaluate,/v1/models/register,/v1/models/execution-ticket,/v1/models/execution-ticket/inspect,/v1/workshop/training/preflight,/v1/workshop/training/run"
         }
       ],
       "requirements": [
@@ -57,6 +57,43 @@
         "service",
         "api",
         "readiness"
+      ]
+    },
+    {
+      "id": "production-evidence-contract",
+      "display_name": "Production Evidence Contract",
+      "category": "governance",
+      "status": "requires_configuration",
+      "description": "Formal production evidence manifest and fail-closed readiness validation contract.",
+      "surfaces": [
+        {
+          "type": "file",
+          "ref": "deployments/production_evidence_manifest.example.json"
+        },
+        {
+          "type": "schema",
+          "ref": "schemas/production_evidence_manifest.schema.json"
+        },
+        {
+          "type": "script",
+          "ref": "scripts/production_readiness_gate.ps1"
+        }
+      ],
+      "requirements": [
+        "SOVEREIGN_PRODUCTION_EVIDENCE_MANIFEST",
+        "SOVEREIGN_SECRET_SOURCE",
+        "SOVEREIGN_IMAGE_REF",
+        "SOVEREIGN_IMAGE_DIGEST",
+        "SOVEREIGN_DEPENDENCY_SCAN_STATUS"
+      ],
+      "governance_actions": [
+        "release_publish"
+      ],
+      "tags": [
+        "production",
+        "evidence",
+        "readiness",
+        "fail-closed"
       ]
     },
     {

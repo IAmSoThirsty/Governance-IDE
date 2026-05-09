@@ -17,18 +17,75 @@ deployment readiness.
 3. `SOVEREIGN_IMAGE_REF` names a durable registry image, not `:local`,
    `localhost`, or `127.0.0.1`.
 4. `SOVEREIGN_IMAGE_DIGEST` names the immutable digest of the pushed image.
-5. `SOVEREIGN_RELEASE_MANIFEST` points at the release manifest for this exact
-   image ref, image digest, and git commit.
-6. Runtime state is backed by durable storage and mounted at `/app/state`.
+5. `SOVEREIGN_PRODUCTION_EVIDENCE_MANIFEST` (or
+   `SOVEREIGN_RELEASE_MANIFEST`) points at a production evidence manifest for
+   this exact image ref, image digest, release commit, and release tag.
+6. `SOVEREIGN_SIGNER_BACKEND` is `ed25519` in production and the Ed25519 key
+   source is explicitly evidenced (`file_path` or `inline_pem`) without
+   exposing private key material.
+7. `SOVEREIGN_SECRET_SOURCE` is declared and references a real secret manager
+   channel (no developer/local placeholder source).
+8. Runtime state is backed by durable storage and mounted at `/app/state`.
    The release declares `SOVEREIGN_STATE_BACKEND` and `SOVEREIGN_STATE_URI`.
-7. Workshop training is actual fine-tuning by default. Production releases
-   declare `SOVEREIGN_TRAINING_COMMAND` and
+9. Workshop training is actual fine-tuning by default. Production releases
+   declare `SOVEREIGN_TRAINING_COMMAND`, `SOVEREIGN_TRAINING_BACKEND`, and
    `SOVEREIGN_TRAINING_ARTIFACT_STORE`.
-8. Release governance names at least two approvers in
-   `SOVEREIGN_RELEASE_APPROVERS`.
-9. Container smoke test passes against the release image.
-10. Local quality, pre-production inspection, advanced integration preflight,
-   and E2E matrix all pass.
+10. Release governance names at least two approvers in
+    `SOVEREIGN_RELEASE_APPROVERS`.
+11. Dependency scan evidence and SBOM locations are recorded in the production
+    evidence manifest; dependency scan status must be `pass`.
+12. Container smoke test passes against the release image.
+13. Local quality, pre-production inspection, advanced integration preflight,
+    and E2E matrix all pass.
+
+## Production Evidence Manifest Contract
+
+Canonical example:
+
+- `deployments/production_evidence_manifest.example.json`
+
+Schema:
+
+- `schemas/production_evidence_manifest.schema.json`
+
+Evidence manifest fields must include (no secrets):
+
+- `release_commit`
+- `release_tag`
+- `registry_image_ref`
+- `image_digest`
+- `runtime_mode`
+- `signer_type`
+- `ed25519_key_source_type`
+- `secret_source`
+- `artifact_store_backend`
+- `trainer_backend`
+- `storage_backend`
+- `audit_journal_backend`
+- `ci_run_id`
+- `build_timestamp`
+- `sbom_location`
+- `dependency_scan_result_location`
+- `dependency_scan_status`
+
+The readiness gate validates this contract against live runtime/deployment
+environment variables and current git commit.
+
+## Gate Failure Classification
+
+`scripts/production_readiness_gate.ps1` classifies blocked outcomes as:
+
+- `repo-code blocked`
+- `environment blocked`
+- `production-evidence blocked`
+- `dependency-security blocked`
+
+Local override mode is explicitly classified as:
+
+- `rehearsal-only pass`
+
+Rehearsal passes must disclose active override flags and overridden evidence and
+must never claim production readiness.
 
 ## Release Flow
 
@@ -37,11 +94,13 @@ deployment readiness.
    `docker build -f deployments/Dockerfile --build-arg VCS_REF=<commit> -t <image> .`
 3. Push the image to the target registry and capture the immutable digest.
 4. Fill a release manifest from `deployments/release.manifest.example.json`.
-5. Inject the environment contract from `deployments/production.env.example`
+5. Fill a production evidence manifest from
+   `deployments/production_evidence_manifest.example.json`.
+6. Inject the environment contract from `deployments/production.env.example`
    through the deployment platform.
-6. Run `scripts/production_readiness_gate.ps1` without local-only overrides.
-7. Deploy the image with `/app/state` backed by the declared durable state URI.
-8. Verify `/health`, authenticated `/ready`, policy evaluation, and audit
+7. Run `scripts/production_readiness_gate.ps1` without local-only overrides.
+8. Deploy the image with `/app/state` backed by the declared durable state URI.
+9. Verify `/health`, authenticated `/ready`, policy evaluation, and audit
    replay in the target environment.
 
 Reference deployment artifacts:
@@ -132,7 +191,8 @@ contract to Postgres, but Postgres is not required for local mode.
 - The state volume exists in the deployment target.
 - Secrets are injected by the deployment target.
 - A real fine-tuning artifact store exists.
-- The release manifest records the pushed image digest.
+- The production evidence manifest records release/image/runtime/dependency
+   evidence and passes fail-closed validation.
 - The production readiness gate passes without `-AllowLocalImage`,
   `-AllowLocalEnvFile`, `-AllowMissingReleaseManifest`, or
   `-SkipContainerSmoke`.

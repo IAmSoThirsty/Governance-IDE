@@ -82,6 +82,7 @@ This repository implements a local-first, offline-capable governance core with:
 - Current endpoints:
   - `GET /health`
   - `GET /ready`
+  - `GET /v1/evidence/status`
   - `GET /v1/apps`
   - `GET /v1/models`
   - `GET /v1/policy`
@@ -158,10 +159,20 @@ This repository implements a local-first, offline-capable governance core with:
   - `./scripts/container_smoke_test.ps1 -ImageName sovereign-ide-runtime`
 - Production gate before release:
   - `./scripts/production_readiness_gate.ps1 -PythonExe C:\Path\To\Python312\python.exe`
+  - Explicit gate classifications:
+    - `repo-code blocked`
+    - `environment blocked`
+    - `production-evidence blocked`
+    - `dependency-security blocked`
+    - `rehearsal-only pass` (never a production-readiness claim)
 - Production release plan:
   - `docs/production_deployment_plan.md`
 - Canonical readiness contract:
   - `deployments/readiness_contract.json`
+- Production evidence manifest contract:
+  - `deployments/production_evidence_manifest.example.json`
+- Production evidence manifest schema:
+  - `schemas/production_evidence_manifest.schema.json`
 - Production environment contract:
   - `deployments/production.env.example`
 - Release manifest template:

@@ -25,12 +25,18 @@
         "container smoke test",
         "durable registry image ref",
         "immutable image digest",
-        "release manifest",
-        "injected signing key",
+        "production evidence manifest",
+        "ed25519 signer backend",
+        "ed25519 key source evidence",
+        "production secret source",
         "injected service token",
         "durable state backend",
+        "audit journal persistence backend",
         "actual training command",
+        "configured trainer backend",
         "durable training artifact store",
+        "dependency scan result and status",
+        "SBOM location",
         "at least two release approvers"
       ],
       "claims_allowed": [
@@ -40,6 +46,20 @@
         "-AllowLocalImage",
         "-AllowLocalEnvFile",
         "-AllowMissingReleaseManifest"
+      ]
+    },
+    "rehearsal": {
+      "description": "Local override mode for deterministic dry-runs only. A rehearsal pass is never a production-readiness claim.",
+      "claims_allowed": [
+        "rehearsal gate pass"
+      ],
+      "claims_forbidden": [
+        "production deployment ready",
+        "production evidence complete"
+      ],
+      "required_disclosure": [
+        "active override flags",
+        "overridden evidence categories"
       ]
     }
   }

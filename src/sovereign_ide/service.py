@@ -32,6 +32,7 @@ from .models import (
     utc_now,
 )
 from .model_registry import GovernedModelRecord, GovernedModelRegistry
+from .production_evidence import safe_runtime_evidence_status
 from .supply_chain import ArtifactType, SupplyChainRegistry
 from .validation import load_policy_pack, validate_repository_artifacts
 from .workshop import SovereignModelServerWorkshop
@@ -920,6 +921,9 @@ def make_handler(workspace_root: str | Path) -> type[BaseHTTPRequestHandler]:
                             status=query.get("status", [None])[0],
                         ),
                     )
+                    return
+                if parsed.path == "/v1/evidence/status":
+                    self._send_json(safe_runtime_evidence_status(root))
                     return
                 if parsed.path == "/v1/models":
                     settings = get_settings(root)

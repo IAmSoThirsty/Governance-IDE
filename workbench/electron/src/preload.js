@@ -12,6 +12,7 @@ contextBridge.exposeInMainWorld(
     setServiceToken: (token) => invoke("workbench:setServiceToken", token),
     getHealth: () => invoke("workbench:getHealth"),
     getReady: () => invoke("workbench:getReady"),
+    getEvidenceStatus: () => invoke("workbench:getEvidenceStatus"),
     listModels: () => invoke("workbench:listModels"),
     registerModel: (payload) => invoke("workbench:registerModel", payload),
     requestExecutionTicket: (payload) => invoke("workbench:requestExecutionTicket", payload),

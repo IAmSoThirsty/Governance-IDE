@@ -8,9 +8,10 @@
     "start": "electron src/main.js",
     "check": "node scripts/check.js",
     "lint": "npm run check",
-    "test": "npm run check"
+    "test": "npm run check",
+    "audit:high": "npm audit --audit-level=high"
   },
   "devDependencies": {
-    "electron": "^30.0.0"
+    "electron": "^39.8.10"
   }
 }

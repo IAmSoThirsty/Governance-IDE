@@ -17,6 +17,7 @@ const runtimeConnectButton = document.getElementById("runtime-connect");
 const runtimeConnectionGrid = document.getElementById("runtime-connection-grid");
 const runtimeHealthOutput = document.getElementById("runtime-health-json");
 const runtimeReadyOutput = document.getElementById("runtime-ready-json");
+const runtimeEvidenceOutput = document.getElementById("runtime-evidence-json");
 
 const modelsTableBody = document.getElementById("models-table-body");
 const refreshModelsButton = document.getElementById("refresh-models");
@@ -143,6 +144,7 @@ function renderConnectionGrid(details) {
     ["Connection State", details.connectionState || "unknown"],
     ["/health status", details.healthStatus || "unknown"],
     ["/ready status", details.readyStatus || "unknown"],
+    ["Evidence Classification", details.evidenceClassification || "unknown"],
     ["Runtime Mode", details.runtimeMode || "unknown"],
     ["Signer Type", details.signerType || "unknown"],
     ["Service Token Required", String(Boolean(details.tokenRequired))],
@@ -159,13 +161,16 @@ function renderConnectionGrid(details) {
 async function refreshRuntimeHealth() {
   const healthResponse = await api.getHealth();
   const readyResponse = await api.getReady();
+  const evidenceResponse = await api.getEvidenceStatus();
 
   runtimeHealthOutput.textContent = pretty(healthResponse);
   runtimeReadyOutput.textContent = pretty(readyResponse);
+  runtimeEvidenceOutput.textContent = pretty(evidenceResponse);
 
   const config = await api.getRuntimeConfig();
   const healthData = healthResponse?.data || {};
   const readyData = readyResponse?.data || {};
+  const evidenceData = evidenceResponse?.data || {};
 
   let connectionState = "offline";
   if (healthResponse.ok && readyResponse.ok) {
@@ -182,13 +187,15 @@ async function refreshRuntimeHealth() {
     readyStatus: readyData.status || readyResponse.error,
     runtimeMode: healthData.runtime_mode,
     signerType: healthData.signer_type,
+    evidenceClassification: evidenceData.classification || "unknown",
     tokenRequired: healthData.service_token_required,
     tokenConfigured: config.tokenConfigured
   });
 
   setGlobalOutput({
     health: healthResponse,
-    ready: readyResponse
+    ready: readyResponse,
+    evidence: evidenceResponse
   });
 }
 

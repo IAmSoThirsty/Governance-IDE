@@ -1,0 +1,119 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sovereign-ide.local/schemas/production_evidence_manifest.schema.json",
+  "title": "Production Evidence Manifest",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "manifest_type",
+    "schema_version",
+    "release_commit",
+    "release_tag",
+    "registry_image_ref",
+    "image_digest",
+    "runtime_mode",
+    "signer_type",
+    "ed25519_key_source_type",
+    "secret_source",
+    "artifact_store_backend",
+    "trainer_backend",
+    "storage_backend",
+    "audit_journal_backend",
+    "ci_run_id",
+    "build_timestamp",
+    "sbom_location",
+    "dependency_scan_result_location",
+    "dependency_scan_status"
+  ],
+  "properties": {
+    "manifest_type": {
+      "type": "string",
+      "const": "production_evidence"
+    },
+    "schema_version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$"
+    },
+    "release_id": {
+      "type": "string"
+    },
+    "release_commit": {
+      "type": "string",
+      "minLength": 7
+    },
+    "release_tag": {
+      "type": "string",
+      "minLength": 1
+    },
+    "registry_image_ref": {
+      "type": "string",
+      "minLength": 1
+    },
+    "image_digest": {
+      "type": "string",
+      "pattern": "^sha256:[a-fA-F0-9]{64}$"
+    },
+    "runtime_mode": {
+      "type": "string",
+      "const": "production"
+    },
+    "signer_type": {
+      "type": "string",
+      "const": "ed25519"
+    },
+    "ed25519_key_source_type": {
+      "type": "string",
+      "enum": [
+        "file_path",
+        "inline_pem"
+      ]
+    },
+    "secret_source": {
+      "type": "string",
+      "minLength": 1
+    },
+    "artifact_store_backend": {
+      "type": "string",
+      "minLength": 1
+    },
+    "trainer_backend": {
+      "type": "string",
+      "minLength": 1
+    },
+    "storage_backend": {
+      "type": "string",
+      "minLength": 1
+    },
+    "audit_journal_backend": {
+      "type": "string",
+      "enum": [
+        "sqlite",
+        "file"
+      ]
+    },
+    "ci_run_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "build_timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "sbom_location": {
+      "type": "string",
+      "minLength": 1
+    },
+    "dependency_scan_result_location": {
+      "type": "string",
+      "minLength": 1
+    },
+    "dependency_scan_status": {
+      "type": "string",
+      "enum": [
+        "pass",
+        "fail",
+        "unavailable"
+      ]
+    }
+  }
+}

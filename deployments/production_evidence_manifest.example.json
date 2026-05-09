@@ -1,0 +1,22 @@
+{
+  "manifest_type": "production_evidence",
+  "schema_version": "1.0.0",
+  "release_id": "release-2026-05-09-001",
+  "release_commit": "replace-with-release-commit",
+  "release_tag": "v0.1.0",
+  "registry_image_ref": "registry.example.com/sovereign/sovereign-ide-runtime:0.1.0",
+  "image_digest": "sha256:replacewith64hexcharactersfromthepushedimage",
+  "runtime_mode": "production",
+  "signer_type": "ed25519",
+  "ed25519_key_source_type": "file_path",
+  "secret_source": "azure_key_vault",
+  "artifact_store_backend": "huggingface",
+  "trainer_backend": "huggingface-jobs",
+  "storage_backend": "persistent_volume",
+  "audit_journal_backend": "sqlite",
+  "ci_run_id": "github-actions:1234567890",
+  "build_timestamp": "2026-05-09T14:00:00+00:00",
+  "sbom_location": "https://artifacts.example.com/sovereign-ide/sbom.spdx.json",
+  "dependency_scan_result_location": "https://artifacts.example.com/sovereign-ide/dependency-scan.json",
+  "dependency_scan_status": "pass"
+}

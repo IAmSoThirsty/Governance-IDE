@@ -4,6 +4,7 @@ param(
     [string]$ImageName = $env:SOVEREIGN_IMAGE_REF,
     [string]$DockerExe = "docker",
     [string]$ReleaseManifestPath = $env:SOVEREIGN_RELEASE_MANIFEST,
+    [string]$ProductionEvidenceManifestPath = $env:SOVEREIGN_PRODUCTION_EVIDENCE_MANIFEST,
     [switch]$SkipE2E,
     [switch]$SkipContainerSmoke,
     [switch]$AllowLocalEnvFile,
@@ -13,6 +14,34 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+
+function Add-Issue {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Category,
+        [Parameter(Mandatory = $true)]
+        [string]$Code,
+        [Parameter(Mandatory = $true)]
+        [string]$Message
+    )
+
+    $script:Issues.Add(
+        [PSCustomObject]@{
+            category = $Category
+            code = $Code
+            message = $Message
+        }
+    ) | Out-Null
+}
+
+function Add-Warning {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Message
+    )
+
+    $script:Warnings.Add($Message) | Out-Null
+}
 
 function Invoke-Checked {
     param(
@@ -29,245 +58,284 @@ function Invoke-Checked {
     }
 }
 
-function Assert-RequiredEnv {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$Name
-    )
-
-    $value = [Environment]::GetEnvironmentVariable($Name)
-    if ([string]::IsNullOrWhiteSpace($value)) {
-        throw "Production readiness requires $Name."
+function Resolve-ManifestPath {
+    if (-not [string]::IsNullOrWhiteSpace($ProductionEvidenceManifestPath)) {
+        return $ProductionEvidenceManifestPath
     }
-    return $value
+    if (-not [string]::IsNullOrWhiteSpace($ReleaseManifestPath)) {
+        return $ReleaseManifestPath
+    }
+    return ""
 }
 
-function Assert-ProductionImageRef {
+function Resolve-Classification {
     param(
+        [object[]]$IssueList = @(),
         [Parameter(Mandatory = $true)]
-        [string]$Value
+        [bool]$RehearsalOverride
     )
 
+    if ($null -eq $IssueList -or $IssueList.Count -eq 0) {
+        if ($RehearsalOverride) {
+            return "rehearsal-only pass"
+        }
+        return "production-ready pass"
+    }
+
+    $categories = @($IssueList | Select-Object -ExpandProperty category -Unique)
+    if ($categories -contains "repo-code blocked") {
+        return "repo-code blocked"
+    }
+    if ($categories -contains "environment blocked") {
+        return "environment blocked"
+    }
+    if ($categories -contains "production-evidence blocked") {
+        return "production-evidence blocked"
+    }
+    if ($categories -contains "dependency-security blocked") {
+        return "dependency-security blocked"
+    }
+    return "production-evidence blocked"
+}
+
+function Invoke-EvidenceValidation {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$WorkspaceRoot,
+        [string]$ManifestPath = ""
+    )
+
+    $args = @(
+        "-m",
+        "sovereign_ide.production_evidence",
+        "--workspace-root",
+        $WorkspaceRoot,
+        "--status-only"
+    )
+
+    if (-not [string]::IsNullOrWhiteSpace($ManifestPath)) {
+        $args += @("--manifest-path", $ManifestPath)
+    }
+    if ($AllowLocalEnvFile) {
+        $args += "--allow-local-env-file"
+    }
     if ($AllowLocalImage) {
-        return
+        $args += "--allow-local-image"
     }
-    if ($Value -match '(^localhost[:/])|(^127\.0\.0\.1[:/])|(:local$)') {
-        throw "SOVEREIGN_IMAGE_REF must name a durable registry image for production: $Value"
-    }
-    if ($Value -notmatch '/' -or $Value -notmatch ':') {
-        throw "SOVEREIGN_IMAGE_REF must include registry/namespace and tag: $Value"
-    }
-}
-
-function Assert-ProductionEnvContract {
-    if (-not $AllowLocalEnvFile -and (Test-Path -LiteralPath ".env")) {
-        throw "Production readiness must not depend on a developer .env file. Inject secrets through the environment."
-    }
-
-    $signingKey = Assert-RequiredEnv -Name "SOVEREIGN_SIGNING_KEY"
-    if ($signingKey -match 'REPLACE|PLACEHOLDER|CHANGE_ME|test|dev') {
-        throw "SOVEREIGN_SIGNING_KEY looks like a placeholder or test value."
-    }
-
-    $serviceToken = Assert-RequiredEnv -Name "SOVEREIGN_SERVICE_TOKEN"
-    if ($serviceToken -match 'REPLACE|PLACEHOLDER|CHANGE_ME|smoke|test|dev') {
-        throw "SOVEREIGN_SERVICE_TOKEN looks like a placeholder or test value."
-    }
-
-    $signerBackend = [Environment]::GetEnvironmentVariable("SOVEREIGN_SIGNER_BACKEND")
-    if ([string]::IsNullOrWhiteSpace($signerBackend)) {
-        $signerBackend = "hmac-dev"
-    }
-    if (-not $AllowLocalImage -and $signerBackend -eq "hmac-dev") {
-        throw "hmac-dev signer is local/dev only and cannot pass production readiness."
-    }
-    if ($signerBackend -eq "ed25519") {
-        $ed25519KeyPem = [Environment]::GetEnvironmentVariable("SOVEREIGN_ED25519_PRIVATE_KEY_PEM")
-        $ed25519KeyPath = [Environment]::GetEnvironmentVariable("SOVEREIGN_ED25519_PRIVATE_KEY_PATH")
-
-        if ([string]::IsNullOrWhiteSpace($ed25519KeyPem) -and [string]::IsNullOrWhiteSpace($ed25519KeyPath)) {
-            throw "Ed25519 signer requires SOVEREIGN_ED25519_PRIVATE_KEY_PEM or SOVEREIGN_ED25519_PRIVATE_KEY_PATH."
-        }
-
-        if (-not [string]::IsNullOrWhiteSpace($ed25519KeyPem) -and $ed25519KeyPem -match 'REPLACE|PLACEHOLDER|CHANGE_ME') {
-            throw "SOVEREIGN_ED25519_PRIVATE_KEY_PEM looks like a placeholder."
-        }
-
-        if (-not [string]::IsNullOrWhiteSpace($ed25519KeyPath)) {
-            if ($ed25519KeyPath -match 'REPLACE|PLACEHOLDER|CHANGE_ME') {
-                throw "SOVEREIGN_ED25519_PRIVATE_KEY_PATH looks like a placeholder."
-            }
-            if (-not (Test-Path -LiteralPath $ed25519KeyPath)) {
-                throw "SOVEREIGN_ED25519_PRIVATE_KEY_PATH does not exist: $ed25519KeyPath"
-            }
-        }
-    }
-
-    $imageRef = Assert-RequiredEnv -Name "SOVEREIGN_IMAGE_REF"
-    Assert-ProductionImageRef -Value $imageRef
-
-    if (-not $AllowLocalImage) {
-        $imageDigest = Assert-RequiredEnv -Name "SOVEREIGN_IMAGE_DIGEST"
-        if ($imageDigest -notmatch '^sha256:[a-fA-F0-9]{64}$') {
-            throw "SOVEREIGN_IMAGE_DIGEST must be an immutable sha256 digest."
-        }
-    }
-
-    $stateBackend = Assert-RequiredEnv -Name "SOVEREIGN_STATE_BACKEND"
-    if ($stateBackend -match '^(local|dev|tmp|temporary)$') {
-        throw "SOVEREIGN_STATE_BACKEND must be durable for production."
-    }
-
-    $stateUri = Assert-RequiredEnv -Name "SOVEREIGN_STATE_URI"
-    if ($stateUri -match '(^state$)|(^\./)|(^\.\\)') {
-        throw "SOVEREIGN_STATE_URI must identify deployment-backed durable storage."
-    }
-
-    $trainingCommand = Assert-RequiredEnv -Name "SOVEREIGN_TRAINING_COMMAND"
-    if ($trainingCommand -match 'simulated|--execution-mode\s+simulated') {
-        throw "SOVEREIGN_TRAINING_COMMAND must run actual fine-tuning, not simulation."
-    }
-
-    $artifactStore = Assert-RequiredEnv -Name "SOVEREIGN_TRAINING_ARTIFACT_STORE"
-    if ($artifactStore -match '^(local|file://|\.\\|\./)') {
-        throw "SOVEREIGN_TRAINING_ARTIFACT_STORE must be durable shared storage."
-    }
-
-    $trainingBackend = [Environment]::GetEnvironmentVariable("SOVEREIGN_TRAINING_BACKEND")
-    if ($trainingBackend -eq "huggingface-jobs") {
-        $hubModelId = Assert-RequiredEnv -Name "SOVEREIGN_HUB_MODEL_ID"
-        if ($hubModelId -match 'REPLACE|PLACEHOLDER|CHANGE_ME') {
-            throw "SOVEREIGN_HUB_MODEL_ID looks like a placeholder."
-        }
-        $hfToken = Assert-RequiredEnv -Name "HF_TOKEN"
-        if ($hfToken -match 'REPLACE|PLACEHOLDER|CHANGE_ME|test|dev') {
-            throw "HF_TOKEN looks like a placeholder or test value."
-        }
-    }
-
-    $approvers = (Assert-RequiredEnv -Name "SOVEREIGN_RELEASE_APPROVERS").Split(",") |
-        ForEach-Object { $_.Trim() } |
-        Where-Object { $_ }
-    if (@($approvers).Count -lt 2) {
-        throw "SOVEREIGN_RELEASE_APPROVERS must name at least two approvers."
-    }
-}
-
-function Assert-ReleaseManifest {
     if ($AllowMissingReleaseManifest) {
-        return
-    }
-    if ([string]::IsNullOrWhiteSpace($ReleaseManifestPath)) {
-        throw "Production readiness requires -ReleaseManifestPath or SOVEREIGN_RELEASE_MANIFEST."
-    }
-    if (-not (Test-Path -LiteralPath $ReleaseManifestPath)) {
-        throw "Release manifest not found: $ReleaseManifestPath"
+        $args += "--allow-missing-manifest"
     }
 
-    $manifest = Get-Content -LiteralPath $ReleaseManifestPath -Raw |
-        ConvertFrom-Json
-    foreach ($field in @("release_id", "image_ref", "image_digest", "git_commit")) {
-        if (-not $manifest.PSObject.Properties.Name.Contains($field)) {
-            throw "Release manifest missing required field: $field"
+    $previousPythonPath = [Environment]::GetEnvironmentVariable("PYTHONPATH")
+    $srcPythonPath = Join-Path $WorkspaceRoot "src"
+    try {
+        if ([string]::IsNullOrWhiteSpace($previousPythonPath)) {
+            [Environment]::SetEnvironmentVariable("PYTHONPATH", $srcPythonPath)
+        } else {
+            [Environment]::SetEnvironmentVariable(
+                "PYTHONPATH",
+                "$srcPythonPath;$previousPythonPath"
+            )
         }
-        if ([string]::IsNullOrWhiteSpace([string]$manifest.$field)) {
-            throw "Release manifest field is empty: $field"
-        }
-        if ([string]$manifest.$field -match 'replace-with|placeholder') {
-            throw "Release manifest field contains placeholder: $field"
-        }
+        $stdout = & $PythonExe @args
+    } finally {
+        [Environment]::SetEnvironmentVariable("PYTHONPATH", $previousPythonPath)
     }
 
-    $imageRef = [Environment]::GetEnvironmentVariable("SOVEREIGN_IMAGE_REF")
-    if ([string]$manifest.image_ref -ne $imageRef) {
-        throw "Release manifest image_ref does not match SOVEREIGN_IMAGE_REF."
-    }
-
-    $imageDigest = [Environment]::GetEnvironmentVariable("SOVEREIGN_IMAGE_DIGEST")
-    if ([string]$manifest.image_digest -ne $imageDigest) {
-        throw "Release manifest image_digest does not match SOVEREIGN_IMAGE_DIGEST."
-    }
-
-    $headCommit = (& git rev-parse HEAD).Trim()
     if ($LASTEXITCODE -ne 0) {
-        throw "Unable to resolve current git commit for release manifest validation."
+        Add-Issue -Category "environment blocked" -Code "evidence_validation_execution_failed" -Message "unable to execute production evidence validator"
+        return $null
     }
-    $manifestCommit = [string]$manifest.git_commit
-    if (-not $headCommit.StartsWith($manifestCommit) -and $manifestCommit -ne $headCommit) {
-        throw "Release manifest git_commit does not match the current release tree."
+
+    $joined = ($stdout -join "`n").Trim()
+    if ([string]::IsNullOrWhiteSpace($joined)) {
+        Add-Issue -Category "environment blocked" -Code "evidence_validation_no_output" -Message "production evidence validator returned no output"
+        return $null
+    }
+
+    try {
+        return $joined | ConvertFrom-Json
+    } catch {
+        Add-Issue -Category "environment blocked" -Code "evidence_validation_invalid_json" -Message "production evidence validator returned invalid JSON"
+        return $null
     }
 }
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $repoRoot
 
+$Issues = New-Object System.Collections.Generic.List[object]
+$Warnings = New-Object System.Collections.Generic.List[string]
+
 $rehearsalOverride = $AllowLocalEnvFile -or $AllowLocalImage -or $AllowMissingReleaseManifest
+$effectiveManifestPath = Resolve-ManifestPath
 
-Assert-ProductionEnvContract
-Assert-ReleaseManifest
-
-Invoke-Checked -FilePath "powershell" -Arguments @(
-    "-NoProfile",
-    "-ExecutionPolicy",
-    "Bypass",
-    "-File",
-    "scripts/local_quality_gate.ps1",
-    "-PythonExe",
-    $PythonExe
-)
-
-Invoke-Checked -FilePath "powershell" -Arguments @(
-    "-NoProfile",
-    "-ExecutionPolicy",
-    "Bypass",
-    "-File",
-    "scripts/preprod_inspection.ps1",
-    "-PythonExe",
-    $PythonExe
-)
-
-Invoke-Checked -FilePath "powershell" -Arguments @(
-    "-NoProfile",
-    "-ExecutionPolicy",
-    "Bypass",
-    "-File",
-    "scripts/advanced_integration_preflight.ps1",
-    "-PythonExe",
-    $PythonExe
-)
-
-if (-not $SkipE2E) {
-    Invoke-Checked -FilePath "powershell" -Arguments @(
-        "-NoProfile",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-File",
-        "scripts/run_e2e_test_matrix.ps1",
-        "-PythonExe",
-        $PythonExe,
-        "-StopOnFailure"
-    )
+if (-not (Test-Path -LiteralPath $PythonExe)) {
+    Add-Issue -Category "environment blocked" -Code "python_runtime_missing" -Message "production readiness requires Python runtime for evidence validation"
 }
 
-if (-not $SkipContainerSmoke) {
-    if ([string]::IsNullOrWhiteSpace($ImageName)) {
-        throw "Production readiness requires -ImageName or SOVEREIGN_IMAGE_REF for container smoke testing."
+$evidenceValidation = $null
+if ($Issues.Count -eq 0) {
+    $evidenceValidation = Invoke-EvidenceValidation ([string]$repoRoot) ([string]$effectiveManifestPath)
+}
+
+if ($null -ne $evidenceValidation) {
+    foreach ($issue in @($evidenceValidation.issues)) {
+        Add-Issue -Category ([string]$issue.category) -Code ([string]$issue.code) -Message ([string]$issue.message)
     }
-    Invoke-Checked -FilePath "powershell" -Arguments @(
-        "-NoProfile",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-File",
-        "scripts/container_smoke_test.ps1",
-        "-ImageName",
-        $ImageName,
-        "-DockerExe",
-        $DockerExe
-    )
+    foreach ($warning in @($evidenceValidation.warnings)) {
+        Add-Warning -Message ([string]$warning)
+    }
+}
+
+$shouldRunRepoGates = $Issues.Count -eq 0
+
+if ($shouldRunRepoGates) {
+    try {
+        Invoke-Checked -FilePath "powershell" -Arguments @(
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            "scripts/local_quality_gate.ps1",
+            "-PythonExe",
+            $PythonExe
+        )
+    } catch {
+        Add-Issue -Category "repo-code blocked" -Code "local_quality_gate_failed" -Message ([string]$_.Exception.Message)
+    }
+}
+
+if ($shouldRunRepoGates -and $Issues.Count -eq 0) {
+    try {
+        Invoke-Checked -FilePath "powershell" -Arguments @(
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            "scripts/preprod_inspection.ps1",
+            "-PythonExe",
+            $PythonExe
+        )
+    } catch {
+        Add-Issue -Category "repo-code blocked" -Code "preprod_inspection_failed" -Message ([string]$_.Exception.Message)
+    }
+}
+
+if ($shouldRunRepoGates -and $Issues.Count -eq 0) {
+    try {
+        Invoke-Checked -FilePath "powershell" -Arguments @(
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            "scripts/advanced_integration_preflight.ps1",
+            "-PythonExe",
+            $PythonExe
+        )
+    } catch {
+        Add-Issue -Category "repo-code blocked" -Code "advanced_integration_preflight_failed" -Message ([string]$_.Exception.Message)
+    }
+}
+
+if ($shouldRunRepoGates -and $Issues.Count -eq 0 -and -not $SkipE2E) {
+    try {
+        Invoke-Checked -FilePath "powershell" -Arguments @(
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            "scripts/run_e2e_test_matrix.ps1",
+            "-PythonExe",
+            $PythonExe,
+            "-StopOnFailure"
+        )
+    } catch {
+        Add-Issue -Category "repo-code blocked" -Code "e2e_matrix_failed" -Message ([string]$_.Exception.Message)
+    }
+}
+
+if ($shouldRunRepoGates -and $Issues.Count -eq 0 -and -not $SkipContainerSmoke) {
+    if ([string]::IsNullOrWhiteSpace($ImageName)) {
+        Add-Issue -Category "environment blocked" -Code "container_smoke_image_missing" -Message "container smoke requires -ImageName or SOVEREIGN_IMAGE_REF"
+    } else {
+        try {
+            Invoke-Checked -FilePath "powershell" -Arguments @(
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "scripts/container_smoke_test.ps1",
+                "-ImageName",
+                $ImageName,
+                "-DockerExe",
+                $DockerExe
+            )
+        } catch {
+            Add-Issue -Category "repo-code blocked" -Code "container_smoke_failed" -Message ([string]$_.Exception.Message)
+        }
+    }
+}
+
+$classification = Resolve-Classification -IssueList ($Issues.ToArray()) -RehearsalOverride:$rehearsalOverride
+
+$overridesActive = New-Object System.Collections.Generic.List[string]
+if ($AllowLocalEnvFile) {
+    $overridesActive.Add("-AllowLocalEnvFile") | Out-Null
+}
+if ($AllowLocalImage) {
+    $overridesActive.Add("-AllowLocalImage") | Out-Null
+}
+if ($AllowMissingReleaseManifest) {
+    $overridesActive.Add("-AllowMissingReleaseManifest") | Out-Null
+}
+
+$overriddenEvidence = New-Object System.Collections.Generic.List[string]
+if ($null -ne $evidenceValidation) {
+    foreach ($entry in @($evidenceValidation.overridden_evidence)) {
+        $entryText = [string]$entry
+        if (-not [string]::IsNullOrWhiteSpace($entryText)) {
+            $overriddenEvidence.Add($entryText) | Out-Null
+        }
+    }
+}
+
+$manifestPathSummary = $effectiveManifestPath
+$manifestSummaryPayload = @{}
+if ($null -ne $evidenceValidation) {
+    $manifestPathSummary = [string]$evidenceValidation.manifest_path
+    $manifestSummaryPayload = $evidenceValidation.manifest_summary
+}
+
+$summary = [PSCustomObject]@{
+    generated_at = (Get-Date).ToString("o")
+    classification = $classification
+    allowed = ($Issues.Count -eq 0)
+    production_claim = (-not $rehearsalOverride -and $Issues.Count -eq 0)
+    overrides_active = $overridesActive.ToArray()
+    overridden_evidence = $overriddenEvidence.ToArray()
+    manifest_path = $manifestPathSummary
+    manifest_summary = $manifestSummaryPayload
+    issues = $Issues.ToArray()
+    warnings = $Warnings.ToArray()
+}
+
+$summary | ConvertTo-Json -Depth 8
+
+if ($Issues.Count -gt 0) {
+    throw "Production readiness gate blocked: $classification"
 }
 
 if ($rehearsalOverride) {
+    $overridesText = (@($summary.overrides_active) -join ", ")
+    $overriddenEvidenceText = (@($summary.overridden_evidence) -join ", ")
     Write-Host "[production] Rehearsal override gate passed (no production-readiness claim)"
+    if (-not [string]::IsNullOrWhiteSpace($overridesText)) {
+        Write-Host "[production] Active overrides: $overridesText"
+    }
+    if (-not [string]::IsNullOrWhiteSpace($overriddenEvidenceText)) {
+        Write-Host "[production] Overridden evidence: $overriddenEvidenceText"
+    }
 } else {
     Write-Host "[production] Readiness gate passed"
 }

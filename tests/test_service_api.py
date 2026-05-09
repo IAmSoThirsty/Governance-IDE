@@ -305,6 +305,19 @@ class ServiceApiTests(unittest.TestCase):
         self.assertEqual(ready["status"], "ready")
         self.assertTrue(ready["checks"])
 
+    def test_evidence_status_endpoint_is_read_only_and_secret_safe(self) -> None:
+        status = self._get_json("/v1/evidence/status")
+        self.assertIn("classification", status)
+        self.assertIn("allowed", status)
+        self.assertIn("issues", status)
+        self.assertIn("manifest_summary", status)
+        self.assertIn("runtime_mode", status)
+        self.assertIn("signer_backend", status)
+
+        raw = json.dumps(status)
+        self.assertNotIn("cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", raw)
+        self.assertNotIn("service-token-very-long-value", raw)
+
     def test_policy_evaluate_and_replay(self) -> None:
         trace_id = "trace_service_test"
         result = self._post_json(

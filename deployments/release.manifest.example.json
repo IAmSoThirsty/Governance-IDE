@@ -1,31 +1,26 @@
 {
-  "release_id": "release-2026-05-08-001",
-  "image_ref": "registry.example.com/sovereign/sovereign-ide-runtime:0.1.0",
-  "image_digest": "sha256:replace-with-pushed-image-digest",
-  "git_commit": "replace-with-release-commit",
-  "state_backend": "persistent_volume",
-  "state_uri": "pvc://sovereign-ide-state",
-  "policy_path": "policies/baseline_policy.json",
-  "training": {
-    "mode": "actual",
-    "command": "python scripts/trainers/trl_sft_trainer.py",
-    "artifact_store": "s3://replace-with-model-artifact-bucket/checkpoints",
-    "dataset_contract": "governed workshop dataset manifests only"
-  },
-  "governance": {
-    "required_approvers": [
-      "release_authority",
-      "security_reviewer"
-    ],
-    "rollback_model": "compensation_only",
-    "audit_journal": "append_only_hash_chain"
-  },
-  "gates": {
-    "local_quality": "required",
-    "e2e_matrix": "required",
-    "preprod_inspection": "required",
-    "advanced_integration_preflight": "required",
-    "container_smoke": "required",
-    "production_env_contract": "required"
+  "manifest_type": "production_evidence",
+  "schema_version": "1.0.0",
+  "release_id": "release-2026-05-09-001",
+  "release_commit": "replace-with-release-commit",
+  "release_tag": "v0.1.0",
+  "registry_image_ref": "registry.example.com/sovereign/sovereign-ide-runtime:0.1.0",
+  "image_digest": "sha256:replacewith64hexcharactersfromthepushedimage",
+  "runtime_mode": "production",
+  "signer_type": "ed25519",
+  "ed25519_key_source_type": "file_path",
+  "secret_source": "azure_key_vault",
+  "artifact_store_backend": "huggingface",
+  "trainer_backend": "huggingface-jobs",
+  "storage_backend": "persistent_volume",
+  "audit_journal_backend": "sqlite",
+  "ci_run_id": "github-actions:1234567890",
+  "build_timestamp": "2026-05-09T14:00:00+00:00",
+  "sbom_location": "https://artifacts.example.com/sovereign-ide/sbom.spdx.json",
+  "dependency_scan_result_location": "https://artifacts.example.com/sovereign-ide/dependency-scan.json",
+  "dependency_scan_status": "pass",
+  "legacy_compatibility": {
+    "image_ref": "registry.example.com/sovereign/sovereign-ide-runtime:0.1.0",
+    "git_commit": "replace-with-release-commit"
   }
 }

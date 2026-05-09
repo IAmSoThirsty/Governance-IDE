@@ -6,6 +6,7 @@ const DEFAULT_RUNTIME_URL = "http://127.0.0.1:8765";
 const API_ROUTES = Object.freeze({
   health: { method: "GET", path: "/health", requiresAuth: false },
   ready: { method: "GET", path: "/ready", requiresAuth: true },
+  evidenceStatus: { method: "GET", path: "/v1/evidence/status", requiresAuth: true },
   modelsList: { method: "GET", path: "/v1/models", requiresAuth: true },
   modelsRegister: {
     method: "POST",
@@ -182,6 +183,7 @@ function registerIpcHandlers() {
 
   ipcMain.handle("workbench:getHealth", () => runtimeRequest("health"));
   ipcMain.handle("workbench:getReady", () => runtimeRequest("ready"));
+  ipcMain.handle("workbench:getEvidenceStatus", () => runtimeRequest("evidenceStatus"));
   ipcMain.handle("workbench:listModels", () => runtimeRequest("modelsList"));
   ipcMain.handle("workbench:registerModel", (_event, payload) => {
     return runtimeRequest("modelsRegister", { body: payload || {} });

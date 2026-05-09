@@ -20,7 +20,7 @@ Configuration:
 
 Implemented panels:
 
-- Runtime Health (`/health`, `/ready`)
+- Runtime Health (`/health`, `/ready`, `/v1/evidence/status`)
 - Model Registry (`/v1/models`)
 - Model Registration (`/v1/models/register`)
 - Execution Tickets (`/v1/models/execution-ticket`, `/v1/models/execution-ticket/inspect`)
