@@ -85,12 +85,16 @@ This repository implements a local-first, offline-capable governance core with:
   - `GET /v1/apps`
   - `GET /v1/models`
   - `GET /v1/policy`
+  - `GET /v1/audit/events`
   - `GET /v1/audit/replay?trace_id=...`
   - `POST /v1/policy/evaluate`
+  - `POST /v1/models/register`
   - `POST /v1/models/execution-ticket`
   - `POST /v1/models/execution-ticket/inspect`
   - `POST /v1/workshop/training/preflight`
   - `POST /v1/workshop/training/run`
+  - `/health` returns safe runtime metadata including `runtime_mode` and
+    `signer_type` (no secret material).
 
 ## IDE app catalog
 
@@ -106,10 +110,19 @@ This repository implements a local-first, offline-capable governance core with:
 
 - Workbench scaffold:
   - `workbench/electron/`
-- The workbench is governance-native: model intake, fine-tuning, policy,
-  audit, quorum approval, evidence, and runtime state are first-class panels.
-- It calls the runtime service API and must not bake secrets into the desktop
-  bundle.
+- The workbench is governance-native and routes all meaningful execution through
+  runtime API flows.
+- Implemented governed panels:
+  - Runtime health (`/health`, `/ready`)
+  - Model registry (`/v1/models`)
+  - Model registration (`/v1/models/register`)
+  - Execution tickets (`/v1/models/execution-ticket`, inspect)
+  - Fine tuning workshop (`/v1/workshop/training/preflight`, run)
+  - Audit/event journal (`/v1/audit/events`, replay)
+- Renderer security boundary is enforced through Electron preload IPC
+  allowlisting; no direct registry/SQLite mutation paths and no direct trainer
+  invocation from the desktop shell.
+- It must not bake secrets into the desktop bundle.
 
 ## Governed model intake
 

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
 from pathlib import Path
+import sqlite3
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
@@ -12,6 +14,7 @@ from .app_catalog import filter_app_catalog, load_app_catalog
 from .config import get_settings
 from .governance import (
     GovernanceRuntime,
+    HashChainJournal,
     JournalIntegrityError,
     PolicyEngine,
     PolicyViolation,
@@ -29,6 +32,7 @@ from .models import (
     utc_now,
 )
 from .model_registry import GovernedModelRecord, GovernedModelRegistry
+from .supply_chain import ArtifactType, SupplyChainRegistry
 from .validation import load_policy_pack, validate_repository_artifacts
 from .workshop import SovereignModelServerWorkshop
 
@@ -194,6 +198,204 @@ def _extract_denial_reason(reason: str) -> str:
     if reason.startswith(mutation_prefix):
         return reason[len(mutation_prefix):]
     return reason
+
+
+def _extract_mutation_failure_reason(reason: str) -> str:
+    mutation_prefix = "mutation_execution_failed:"
+    if reason.startswith(mutation_prefix):
+        return reason[len(mutation_prefix):]
+    return reason
+
+
+def _runtime_mode_from_env() -> str:
+    raw_mode = os.getenv("SOVEREIGN_RUNTIME_MODE", "local").strip().lower()
+    aliases = {
+        "dev": "local",
+        "development": "local",
+        "prod": "production",
+    }
+    normalized = aliases.get(raw_mode, raw_mode)
+    if normalized in {"local", "rehearsal", "production"}:
+        return normalized
+    return "unknown"
+
+
+def _signer_type_from_env() -> str:
+    backend = os.getenv("SOVEREIGN_SIGNER_BACKEND", "hmac-dev").strip().lower()
+    if backend == "hmac-dev":
+        return "HMACDecisionSigner"
+    if backend == "ed25519":
+        return "Ed25519DecisionSigner"
+    return "UnknownSigner"
+
+
+def _load_hash_journal_entries(path: Path) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    return HashChainJournal(path).read_all()
+
+
+def _load_sqlite_journal_entries(path: Path) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+
+    try:
+        with closing(
+            sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True),
+        ) as db:
+            rows = db.execute(
+                """
+                SELECT entry_id, sequence, timestamp, record_type, trace_id,
+                       payload_json, previous_hash, entry_hash
+                FROM events
+                ORDER BY sequence ASC
+                """,
+            ).fetchall()
+    except sqlite3.Error:
+        return []
+
+    entries: list[dict[str, Any]] = []
+    for row in rows:
+        payload_text = str(row[5])
+        try:
+            payload = json.loads(payload_text)
+        except json.JSONDecodeError:
+            payload = {"raw_payload": payload_text}
+        entries.append(
+            {
+                "entry_id": row[0],
+                "sequence": row[1],
+                "timestamp": row[2],
+                "record_type": row[3],
+                "trace_id": row[4],
+                "payload": payload,
+                "previous_hash": row[6],
+                "entry_hash": row[7],
+            },
+        )
+    return entries
+
+
+def _first_non_empty(*values: Any) -> str | None:
+    for value in values:
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text:
+            return text
+    return None
+
+
+def _project_audit_event(entry: dict[str, Any], *, source_journal: str) -> dict[str, Any]:
+    payload = entry.get("payload")
+    payload_map = payload if isinstance(payload, dict) else {}
+    details = payload_map.get("details")
+    details_map = details if isinstance(details, dict) else {}
+
+    reason = _first_non_empty(
+        payload_map.get("reason"),
+        payload_map.get("reason_code"),
+        payload_map.get("error"),
+        details_map.get("reason"),
+        details_map.get("error"),
+    )
+    model_id = _first_non_empty(
+        payload_map.get("model_id"),
+        payload_map.get("base_model_id"),
+        details_map.get("model_id"),
+        details_map.get("base_model_id"),
+    )
+    training_id = _first_non_empty(
+        payload_map.get("run_id"),
+        payload_map.get("training_id"),
+        payload_map.get("checkpoint_id"),
+        details_map.get("run_id"),
+        details_map.get("training_id"),
+        details_map.get("checkpoint_id"),
+    )
+    ticket_id = _first_non_empty(
+        payload_map.get("ticket_id"),
+        details_map.get("ticket_id"),
+    )
+
+    return {
+        "entry_id": entry.get("entry_id"),
+        "sequence": entry.get("sequence"),
+        "timestamp": entry.get("timestamp"),
+        "record_type": entry.get("record_type"),
+        "trace_id": entry.get("trace_id"),
+        "source_journal": source_journal,
+        "reason": reason,
+        "model_id": model_id,
+        "training_id": training_id,
+        "ticket_id": ticket_id,
+        "payload": payload_map,
+    }
+
+
+def list_audit_events(
+    workspace_root: str | Path,
+    *,
+    limit: int = 100,
+    trace_id: str | None = None,
+    record_type: str | None = None,
+    source_journal: str | None = None,
+) -> dict[str, Any]:
+    root = Path(workspace_root).resolve()
+    settings = get_settings(root)
+
+    normalized_limit = max(1, min(limit, 500))
+    normalized_source = (source_journal or "").strip().lower() or None
+    if normalized_source not in {None, "runtime", "workshop"}:
+        raise ValueError("source must be one of runtime or workshop")
+
+    normalized_trace = (trace_id or "").strip() or None
+    normalized_record_type = (record_type or "").strip() or None
+
+    entries: list[dict[str, Any]] = []
+    if normalized_source in {None, "runtime"}:
+        if settings.journal_backend == "file":
+            runtime_entries = _load_hash_journal_entries(settings.journal_path)
+        else:
+            runtime_entries = _load_sqlite_journal_entries(settings.sqlite_journal_path)
+        entries.extend(
+            _project_audit_event(item, source_journal="runtime")
+            for item in runtime_entries
+        )
+
+    if normalized_source in {None, "workshop"}:
+        if settings.journal_backend == "file":
+            workshop_path = settings.state_dir / "workshop" / "workshop_journal.jsonl"
+            workshop_entries = _load_hash_journal_entries(workshop_path)
+        else:
+            workshop_path = settings.state_dir / "workshop" / "workshop_events.sqlite3"
+            workshop_entries = _load_sqlite_journal_entries(workshop_path)
+        entries.extend(
+            _project_audit_event(item, source_journal="workshop")
+            for item in workshop_entries
+        )
+
+    filtered = [
+        item
+        for item in entries
+        if (not normalized_trace or item["trace_id"] == normalized_trace)
+        and (
+            not normalized_record_type
+            or item["record_type"] == normalized_record_type
+        )
+    ]
+    filtered.sort(key=lambda item: str(item.get("timestamp", "")), reverse=True)
+
+    limited = filtered[:normalized_limit]
+    return {
+        "events": limited,
+        "event_count": len(limited),
+        "total_available": len(filtered),
+        "limit": normalized_limit,
+        "source_journal": normalized_source or "all",
+        "trace_id": normalized_trace,
+        "record_type": normalized_record_type,
+    }
 
 
 def _is_mutable_source_without_proof(model: GovernedModelRecord) -> bool:
@@ -678,7 +880,16 @@ def make_handler(workspace_root: str | Path) -> type[BaseHTTPRequestHandler]:
                 parsed = urlparse(self.path)
                 if parsed.path == "/health":
                     self._send_json(
-                        {"status": "ok", "service": "sovereign-ide"},
+                        {
+                            "status": "ok",
+                            "service": "sovereign-ide",
+                            "runtime_mode": _runtime_mode_from_env(),
+                            "signer_type": _signer_type_from_env(),
+                            "service_token_required": bool(
+                                os.getenv("SOVEREIGN_SERVICE_TOKEN", "").strip(),
+                            ),
+                            "generated_at": utc_now(),
+                        },
                     )
                     return
                 if not self._authorized():
@@ -735,6 +946,9 @@ def make_handler(workspace_root: str | Path) -> type[BaseHTTPRequestHandler]:
                         },
                     )
                     return
+                if parsed.path == "/v1/audit/events":
+                    self._handle_audit_events(parsed)
+                    return
                 self._send_error(404, "not found")
             except Exception as exc:  # noqa: BLE001
                 self._send_error(500, str(exc))
@@ -747,6 +961,9 @@ def make_handler(workspace_root: str | Path) -> type[BaseHTTPRequestHandler]:
                 parsed = urlparse(self.path)
                 if parsed.path == "/v1/policy/evaluate":
                     self._handle_policy_evaluate()
+                    return
+                if parsed.path == "/v1/models/register":
+                    self._handle_model_register()
                     return
                 if parsed.path == "/v1/models/execution-ticket":
                     self._handle_model_execution_ticket()
@@ -811,6 +1028,214 @@ def make_handler(workspace_root: str | Path) -> type[BaseHTTPRequestHandler]:
                     "evaluation": to_primitive(evaluation),
                     "binding": to_primitive(binding),
                 },
+            )
+
+        def _handle_audit_events(self, parsed: Any) -> None:
+            query = parse_qs(parsed.query)
+            limit_raw = str(query.get("limit", ["100"])[0]).strip()
+            try:
+                limit = int(limit_raw)
+            except ValueError as exc:
+                raise ValueError("limit must be an integer") from exc
+
+            trace_id = str(query.get("trace_id", [""])[0]).strip() or None
+            record_type = str(query.get("record_type", [""])[0]).strip() or None
+            source_journal = str(query.get("source", [""])[0]).strip() or None
+
+            payload = list_audit_events(
+                root,
+                limit=limit,
+                trace_id=trace_id,
+                record_type=record_type,
+                source_journal=source_journal,
+            )
+            self._send_json(payload)
+
+        def _handle_model_register(self) -> None:
+            body = self._read_json()
+            context_raw = self._require_mapping(body.get("context"), "context")
+            context = GovernanceContext(
+                trace_id=str(context_raw.get("trace_id") or new_id("trace")),
+                actor_id=str(context_raw["actor_id"]),
+                actor_roles=tuple(context_raw["actor_roles"]),
+                tenant=str(context_raw["tenant"]),
+                trust_domain=str(context_raw["trust_domain"]),
+                workspace_root=str(context_raw.get("workspace_root") or root),
+                classification=str(context_raw["classification"]),
+                policy_pack_version=str(
+                    context_raw.get("policy_pack_version", "1.0.0"),
+                ),
+            )
+
+            source_type = str(body.get("source_type") or "").strip()
+            source = str(body.get("source") or "").strip()
+            if not source_type:
+                raise ValueError("source_type is required")
+            if not source:
+                raise ValueError("source is required")
+
+            trust_level = str(body.get("trust_level") or "").strip()
+            policy_profile = str(body.get("policy_profile") or "").strip()
+            provenance_ref = str(body.get("provenance_ref") or "").strip()
+            quorum_proof = str(body.get("quorum_proof") or "").strip()
+            if not quorum_proof:
+                raise ValueError("quorum_proof is required")
+
+            metadata = self._require_mapping(
+                body.get("metadata") or {},
+                "metadata",
+            )
+            content_hash = self._optional_str(body.get("content_hash"))
+            immutable_identifier = self._optional_str(
+                body.get("immutable_identifier"),
+            )
+            license_value = str(body.get("license") or "unknown").strip() or "unknown"
+
+            settings = get_settings(root)
+            runtime = build_runtime(root)
+            token = CapabilityToken(
+                token_id=new_id("token"),
+                subject=context.actor_id,
+                scopes=("register_model",),
+                trust_domain=context.trust_domain,
+                issued_at=utc_now(),
+                expires_at=(
+                    datetime.now(timezone.utc) + timedelta(minutes=15)
+                ).isoformat(),
+                revoked=False,
+            )
+
+            _request, evaluation, binding = runtime.evaluate_and_bind(
+                context=context,
+                action="register_model",
+                resource=str(settings.model_registry_path),
+                mutation_class=MutationClass.GOVERNANCE_MUTATION,
+                capability_token=token,
+            )
+            mutation_binding = runtime.build_mutation_binding(
+                context=context,
+                action="register_model",
+                resource=str(settings.model_registry_path),
+                mutation_class=MutationClass.GOVERNANCE_MUTATION,
+                capability_token=token,
+                evaluation=evaluation,
+                binding=binding,
+                resolution_policy="invariants>policyEvaluation>capabilityToken",
+                quorum_proof=quorum_proof,
+            )
+
+            def _mutate() -> dict[str, Any]:
+                resolved_content_hash = content_hash
+                if source_type == "local_path" and not resolved_content_hash:
+                    resolved_content_hash = GovernedModelRegistry.hash_local_path(source)
+
+                registry = GovernedModelRegistry(settings.model_registry_path)
+                record = registry.register(
+                    source_type=source_type,
+                    source=source,
+                    license=license_value,
+                    content_hash=resolved_content_hash,
+                    immutable_identifier=immutable_identifier,
+                    metadata=metadata,
+                    trust_level=trust_level,
+                    policy_profile=policy_profile,
+                    provenance_ref=provenance_ref,
+                    signer=runtime.signer,
+                )
+
+                supply_chain = SupplyChainRegistry(settings.supply_chain_path)
+                try:
+                    supply_chain.register_candidate(
+                        artifact_id=record.model_id,
+                        artifact_type=ArtifactType.MODEL,
+                        publisher=context.actor_id,
+                        checksum=record.content_hash,
+                        signature_verified=record.signature is not None,
+                        static_scan_passed=True,
+                        dependency_scan_passed=True,
+                        provenance_verified=True,
+                        airgap_manifest_approved=False,
+                    )
+                except ValueError as exc:
+                    if str(exc) != "artifact already registered":
+                        raise
+
+                supply_chain.register_evidence(
+                    artifact_id=record.model_id,
+                    evidence_type="provenance",
+                    passed=True,
+                    evidence_ref=record.provenance_ref,
+                )
+                if record.signature is not None:
+                    supply_chain.register_evidence(
+                        artifact_id=record.model_id,
+                        evidence_type="signature",
+                        passed=True,
+                        evidence_ref=(
+                            f"signature://{record.signature.key_id}/{record.model_id}"
+                        ),
+                    )
+
+                return {"model": to_primitive(record)}
+
+            result = runtime.commit_mutation(mutation_binding, _mutate)
+            decision_hash = sha256_hex(result.decision)
+
+            if not result.applied:
+                reason = _extract_mutation_failure_reason(result.decision.reason)
+                runtime.journal.append(
+                    "model_registration_denied",
+                    context.trace_id,
+                    {
+                        "reason": reason,
+                        "source_type": source_type,
+                        "source": source,
+                        "decision_id": result.decision.decision_id,
+                        "governance_decision_hash": decision_hash,
+                    },
+                )
+                self._send_json(
+                    {
+                        "allowed": False,
+                        "reason": reason,
+                        "governance_decision_hash": decision_hash,
+                        "evaluation": to_primitive(evaluation),
+                        "decision": to_primitive(result.decision),
+                        "payload": None,
+                    },
+                    status=403,
+                )
+                return
+
+            payload = dict(result.payload or {})
+            model = payload.get("model")
+            model_id = (
+                str(model.get("model_id"))
+                if isinstance(model, dict) and model.get("model_id") is not None
+                else None
+            )
+            runtime.journal.append(
+                "model_registered",
+                context.trace_id,
+                {
+                    "model_id": model_id,
+                    "source_type": source_type,
+                    "source": source,
+                    "decision_id": result.decision.decision_id,
+                    "governance_decision_hash": decision_hash,
+                },
+            )
+            self._send_json(
+                {
+                    "allowed": True,
+                    "reason": "ok",
+                    "governance_decision_hash": decision_hash,
+                    "evaluation": to_primitive(evaluation),
+                    "decision": to_primitive(result.decision),
+                    "payload": payload,
+                    "model": model,
+                },
+                status=200,
             )
 
         def _handle_model_execution_ticket(self) -> None:

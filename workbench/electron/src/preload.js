@@ -1,6 +1,24 @@
-const { contextBridge } = require("electron");
+const { contextBridge, ipcRenderer } = require("electron");
 
-contextBridge.exposeInMainWorld("sovereignRuntime", {
-  baseUrl: process.env.SOVEREIGN_RUNTIME_URL || "http://127.0.0.1:8765",
-  tokenConfigured: Boolean(process.env.SOVEREIGN_SERVICE_TOKEN)
-});
+function invoke(channel, payload) {
+  return ipcRenderer.invoke(channel, payload);
+}
+
+contextBridge.exposeInMainWorld(
+  "sovereignWorkbench",
+  Object.freeze({
+    getRuntimeConfig: () => invoke("workbench:getRuntimeConfig"),
+    setRuntimeUrl: (runtimeUrl) => invoke("workbench:setRuntimeUrl", runtimeUrl),
+    setServiceToken: (token) => invoke("workbench:setServiceToken", token),
+    getHealth: () => invoke("workbench:getHealth"),
+    getReady: () => invoke("workbench:getReady"),
+    listModels: () => invoke("workbench:listModels"),
+    registerModel: (payload) => invoke("workbench:registerModel", payload),
+    requestExecutionTicket: (payload) => invoke("workbench:requestExecutionTicket", payload),
+    inspectExecutionTicket: (payload) => invoke("workbench:inspectExecutionTicket", payload),
+    preflightTraining: (payload) => invoke("workbench:preflightTraining", payload),
+    runTraining: (payload) => invoke("workbench:runTraining", payload),
+    listAuditEvents: (payload) => invoke("workbench:listAuditEvents", payload),
+    replayAuditTrace: (payload) => invoke("workbench:replayAuditTrace", payload)
+  }),
+);

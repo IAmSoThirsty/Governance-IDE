@@ -10,23 +10,350 @@
     <aside class="sidebar">
       <h1>Sovereign IDE</h1>
       <nav>
-        <button data-panel="models" class="active">Models</button>
-        <button data-panel="training">Fine-Tuning</button>
-        <button data-panel="policy">Policy</button>
-        <button data-panel="audit">Audit</button>
-        <button data-panel="approvals">Approvals</button>
-        <button data-panel="evidence">Evidence</button>
+        <button data-panel="runtime-health" class="active">Runtime Health</button>
+        <button data-panel="model-registry">Model Registry</button>
+        <button data-panel="model-registration">Model Registration</button>
+        <button data-panel="execution-tickets">Execution Tickets</button>
+        <button data-panel="fine-tuning">Fine Tuning Workshop</button>
+        <button data-panel="audit-journal">Audit / Event Journal</button>
       </nav>
     </aside>
     <main>
       <header>
         <div>
           <span class="eyebrow">Governed Runtime</span>
-          <h2 id="panel-title">Models</h2>
+          <h2 id="panel-title">Runtime Health</h2>
         </div>
-        <div class="status" id="runtime-status">checking</div>
+        <div class="status-group">
+          <label for="runtime-url">Runtime URL</label>
+          <input id="runtime-url" type="text" autocomplete="off" spellcheck="false">
+          <label for="runtime-token">Service Token</label>
+          <input id="runtime-token" type="password" autocomplete="off" spellcheck="false">
+          <button id="runtime-connect" class="btn-inline" type="button">Connect</button>
+          <div class="status" id="runtime-status">checking</div>
+        </div>
       </header>
-      <section id="panel-body" class="panel"></section>
+
+      <section class="context-strip">
+        <label>Trace ID (optional)
+          <input id="ctx-trace-id" type="text" placeholder="auto-generated if empty">
+        </label>
+        <label>Actor ID
+          <input id="ctx-actor-id" type="text" value="workbench-operator" required>
+        </label>
+        <label>Actor Roles (comma-separated)
+          <input id="ctx-actor-roles" type="text" value="model_steward,release_authority" required>
+        </label>
+        <label>Tenant
+          <input id="ctx-tenant" type="text" value="tenant1" required>
+        </label>
+        <label>Trust Domain
+          <input id="ctx-trust-domain" type="text" value="domain1" required>
+        </label>
+        <label>Classification
+          <input id="ctx-classification" type="text" value="confidential" required>
+        </label>
+      </section>
+
+      <section id="runtime-health" class="panel panel-page active">
+        <article class="item">
+          <h3>Connection</h3>
+          <div class="kv-grid" id="runtime-connection-grid"></div>
+        </article>
+        <article class="item">
+          <h3>/health</h3>
+          <pre id="runtime-health-json" class="output"></pre>
+        </article>
+        <article class="item">
+          <h3>/ready</h3>
+          <pre id="runtime-ready-json" class="output"></pre>
+        </article>
+      </section>
+
+      <section id="model-registry" class="panel panel-page">
+        <article class="item">
+          <div class="item-header">
+            <h3>Registered Models</h3>
+            <button id="refresh-models" type="button">Refresh</button>
+          </div>
+          <div class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Model ID</th>
+                  <th>Source Type</th>
+                  <th>Trust</th>
+                  <th>Policy</th>
+                  <th>Provenance</th>
+                  <th>Immutable ID</th>
+                  <th>Hash</th>
+                  <th>Signature</th>
+                  <th>Schema</th>
+                </tr>
+              </thead>
+              <tbody id="models-table-body"></tbody>
+            </table>
+          </div>
+        </article>
+      </section>
+
+      <section id="model-registration" class="panel panel-page">
+        <article class="item">
+          <h3>Register Governed Model</h3>
+          <form id="model-registration-form" class="form-grid">
+            <label>Source Type
+              <select id="register-source-type" required>
+                <option value="local_path">local_path</option>
+                <option value="huggingface_model_id">huggingface_model_id</option>
+                <option value="openai_compatible_endpoint">openai_compatible_endpoint</option>
+                <option value="ollama_endpoint">ollama_endpoint</option>
+                <option value="external_gateway">external_gateway</option>
+              </select>
+            </label>
+            <label>Source
+              <input id="register-source" type="text" required>
+            </label>
+            <label>License
+              <input id="register-license" type="text" value="unknown" required>
+            </label>
+            <label>Content Hash (optional)
+              <input id="register-content-hash" type="text">
+            </label>
+            <label>Immutable Identifier (optional)
+              <input id="register-immutable-identifier" type="text">
+            </label>
+            <label>Trust Level
+              <select id="register-trust-level" required>
+                <option value="untrusted">untrusted</option>
+                <option value="quarantine">quarantine</option>
+                <option value="reviewed" selected>reviewed</option>
+                <option value="trusted">trusted</option>
+              </select>
+            </label>
+            <label>Policy Profile
+              <input id="register-policy-profile" type="text" value="default-model-policy" required>
+            </label>
+            <label>Provenance Ref
+              <input id="register-provenance-ref" type="text" required>
+            </label>
+            <label>Quorum Proof
+              <input id="register-quorum-proof" type="text" required>
+            </label>
+            <label class="span-2">Source Metadata JSON
+              <textarea id="register-metadata-json" rows="4">{}</textarea>
+            </label>
+            <div class="span-2 form-actions">
+              <button type="submit">Register Model</button>
+            </div>
+          </form>
+          <pre id="model-registration-result" class="output"></pre>
+        </article>
+      </section>
+
+      <section id="execution-tickets" class="panel panel-page">
+        <article class="item">
+          <h3>Request Execution Ticket</h3>
+          <form id="ticket-request-form" class="form-grid">
+            <label>Model ID
+              <input id="ticket-model-id" type="text" required>
+            </label>
+            <label>Ticket Purpose
+              <input id="ticket-purpose" type="text" value="model_execution" required>
+            </label>
+            <label>TTL Seconds
+              <input id="ticket-ttl" type="number" min="1" max="3600" value="900" required>
+            </label>
+            <div class="span-2 form-actions">
+              <button type="submit">Request Ticket</button>
+            </div>
+          </form>
+          <pre id="ticket-request-result" class="output"></pre>
+        </article>
+
+        <article class="item">
+          <h3>Inspect Ticket</h3>
+          <form id="ticket-inspect-form" class="form-grid">
+            <label class="span-2">Ticket JSON
+              <textarea id="ticket-json" rows="7" required>{}</textarea>
+            </label>
+            <label>Trace ID (optional)
+              <input id="ticket-inspect-trace" type="text">
+            </label>
+            <label>At Time ISO-8601 (optional)
+              <input id="ticket-inspect-at-time" type="text" placeholder="2026-01-01T00:00:00+00:00">
+            </label>
+            <div class="span-2 form-actions">
+              <button type="submit">Inspect Ticket</button>
+            </div>
+          </form>
+          <pre id="ticket-inspect-result" class="output"></pre>
+        </article>
+      </section>
+
+      <section id="fine-tuning" class="panel panel-page">
+        <article class="item">
+          <h3>Fine-Tuning Controls</h3>
+          <p class="muted">All training actions route through governed API flows. Simulation and actual training are strictly separated.</p>
+          <form id="training-form" class="form-grid">
+            <label>Model Family
+              <input id="train-model-family" type="text" required>
+            </label>
+            <label>Base Checkpoint (optional)
+              <input id="train-base-checkpoint" type="text">
+            </label>
+            <label>Base Model ID
+              <input id="train-base-model-id" type="text">
+            </label>
+            <label>Base Model Ticket JSON (optional)
+              <textarea id="train-base-model-ticket" rows="4">{}</textarea>
+            </label>
+            <label>Base Model Admissibility Decision (optional)
+              <input id="train-base-model-admissibility" type="text">
+            </label>
+            <label>Dataset IDs (comma separated)
+              <input id="train-dataset-ids" type="text">
+            </label>
+            <label>Dataset Ref
+              <input id="train-dataset-ref" type="text">
+            </label>
+            <label>Dataset Provenance
+              <input id="train-dataset-provenance" type="text">
+            </label>
+            <label>Dataset Source Type
+              <input id="train-dataset-source-type" type="text">
+            </label>
+            <label>Dataset License
+              <input id="train-dataset-license" type="text">
+            </label>
+            <label>Dataset Hash
+              <input id="train-dataset-hash" type="text">
+            </label>
+            <label>Dataset Immutable Ref
+              <input id="train-dataset-immutable-ref" type="text">
+            </label>
+            <label>Dataset Immutable Proof
+              <input id="train-dataset-immutable-proof" type="text">
+            </label>
+            <label>Policy Profile
+              <input id="train-policy-profile" type="text" value="workshop-fine-tuned-model">
+            </label>
+            <label>Trust Level
+              <select id="train-trust-level">
+                <option value="untrusted">untrusted</option>
+                <option value="quarantine">quarantine</option>
+                <option value="reviewed" selected>reviewed</option>
+                <option value="trusted">trusted</option>
+              </select>
+            </label>
+            <label>Trainer Backend
+              <input id="train-backend" type="text" value="huggingface-jobs">
+            </label>
+            <label>Training Command
+              <input id="train-command" type="text" placeholder="python scripts/trainers/trl_sft_trainer.py">
+            </label>
+            <label>Artifact Store URI
+              <input id="train-artifact-store" type="text" placeholder="https://...">
+            </label>
+            <label>Quorum Proof
+              <input id="train-quorum-proof" type="text" required>
+            </label>
+            <label class="inline-check">
+              <input id="train-simulation-flag" type="checkbox">
+              Explicit simulation smoke-test acknowledgement
+            </label>
+            <div class="span-2 form-actions grouped">
+              <button id="train-preflight-actual" type="button">Preflight Actual Training</button>
+              <button id="train-run-simulation" type="button">Run Simulation Smoke Test</button>
+              <button id="train-run-actual" type="button">Run Actual Governed Training</button>
+            </div>
+          </form>
+
+          <article class="sub-item">
+            <h4>Dataset Governance Requirements</h4>
+            <ul>
+              <li>dataset_id or dataset_ref is required.</li>
+              <li>dataset provenance and source type are required.</li>
+              <li>dataset license is required where applicable.</li>
+              <li>governed training requires dataset hash or immutable reference.</li>
+              <li>mutable datasets are denied for reviewed/trusted runs without immutable proof.</li>
+            </ul>
+          </article>
+
+          <article class="sub-item">
+            <h4>Artifact Store Requirements</h4>
+            <ul>
+              <li>actual training requires durable configured artifact store.</li>
+              <li>artifact store must be writable and bound to registry registration evidence.</li>
+              <li>simulation outputs never satisfy production training evidence.</li>
+            </ul>
+          </article>
+
+          <pre id="training-result" class="output"></pre>
+        </article>
+      </section>
+
+      <section id="audit-journal" class="panel panel-page">
+        <article class="item">
+          <h3>Read-only Audit Events</h3>
+          <form id="audit-filter-form" class="form-grid">
+            <label>Trace ID (optional)
+              <input id="audit-trace-id" type="text">
+            </label>
+            <label>Record Type (optional)
+              <input id="audit-record-type" type="text" placeholder="execution_ticket_denied">
+            </label>
+            <label>Source Journal
+              <select id="audit-source-journal">
+                <option value="">all</option>
+                <option value="runtime">runtime</option>
+                <option value="workshop">workshop</option>
+              </select>
+            </label>
+            <label>Limit
+              <input id="audit-limit" type="number" min="1" max="500" value="50">
+            </label>
+            <div class="span-2 form-actions">
+              <button type="submit">Refresh Events</button>
+            </div>
+          </form>
+
+          <div class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Timestamp</th>
+                  <th>Type</th>
+                  <th>Reason</th>
+                  <th>Model</th>
+                  <th>Training</th>
+                  <th>Ticket</th>
+                  <th>Trace</th>
+                  <th>Source</th>
+                </tr>
+              </thead>
+              <tbody id="audit-events-body"></tbody>
+            </table>
+          </div>
+
+          <article class="sub-item">
+            <h4>Trace Replay</h4>
+            <form id="audit-replay-form" class="form-grid">
+              <label>Trace ID
+                <input id="audit-replay-trace-id" type="text" required>
+              </label>
+              <div class="form-actions">
+                <button type="submit">Replay Trace</button>
+              </div>
+            </form>
+            <pre id="audit-replay-result" class="output"></pre>
+          </article>
+        </article>
+      </section>
+
+      <article id="global-output" class="item global-output">
+        <h3>Result</h3>
+        <pre id="global-output-json" class="output"></pre>
+      </article>
     </main>
     <script src="workbench.js"></script>
   </body>

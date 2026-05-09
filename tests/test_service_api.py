@@ -63,6 +63,11 @@ def _write_policy(root: Path) -> None:
                         "allowed_roles": ["developer"],
                         "quorum_required": False,
                     },
+                    "register_model": {
+                        "required_mutation_class": "governanceMutation",
+                        "allowed_roles": ["model_steward", "release_authority"],
+                        "quorum_required": True,
+                    },
                     "execute_model": {
                         "required_mutation_class": "read",
                         "allowed_roles": ["developer"],
@@ -292,6 +297,9 @@ class ServiceApiTests(unittest.TestCase):
     def test_health_and_ready_endpoints(self) -> None:
         health = self._get_json("/health")
         self.assertEqual(health["status"], "ok")
+        self.assertIn("runtime_mode", health)
+        self.assertIn("signer_type", health)
+        self.assertIn("service_token_required", health)
 
         ready = self._get_json("/ready")
         self.assertEqual(ready["status"], "ready")
@@ -337,6 +345,104 @@ class ServiceApiTests(unittest.TestCase):
     def test_models_endpoint_lists_registered_models(self) -> None:
         models = self._get_json("/v1/models")
         self.assertEqual(models["models"], [])
+
+    def test_model_register_endpoint_registers_model_with_governed_response(self) -> None:
+        model_path = self.root / "registered_model.bin"
+        model_path.write_text("weights", encoding="utf-8")
+
+        status, response = self._post_json_with_status(
+            "/v1/models/register",
+            {
+                "source_type": "local_path",
+                "source": str(model_path),
+                "license": "test-license",
+                "trust_level": "reviewed",
+                "policy_profile": "default-model-policy",
+                "provenance_ref": "provenance://registered_model.bin",
+                "metadata": {"family": "unit-test"},
+                "quorum_proof": "register-quorum",
+                "context": {
+                    "trace_id": "trace_model_register_success",
+                    "actor_id": "steward1",
+                    "actor_roles": ["model_steward"],
+                    "tenant": "tenant1",
+                    "trust_domain": "domain1",
+                    "classification": "confidential",
+                },
+            },
+        )
+
+        self.assertEqual(status, 200)
+        self.assertTrue(response["allowed"])
+        self.assertEqual(response["reason"], "ok")
+        self.assertIn("governance_decision_hash", response)
+        model = response["model"]
+        self.assertEqual(model["source_type"], "local_path")
+        self.assertEqual(model["trust_level"], "reviewed")
+        self.assertEqual(model["policy_profile"], "default-model-policy")
+
+        listed = self._get_json("/v1/models")
+        self.assertEqual(len(listed["models"]), 1)
+        self.assertEqual(listed["models"][0]["model_id"], model["model_id"])
+
+    def test_model_register_denies_mutable_endpoint_without_immutable_proof(self) -> None:
+        status, response = self._post_json_with_status(
+            "/v1/models/register",
+            {
+                "source_type": "openai_compatible_endpoint",
+                "source": "https://api.example.invalid/v1",
+                "license": "service-terms",
+                "trust_level": "reviewed",
+                "policy_profile": "default-model-policy",
+                "provenance_ref": "endpoint://api.example.invalid/v1",
+                "metadata": {},
+                "quorum_proof": "register-quorum",
+                "context": {
+                    "trace_id": "trace_model_register_mutable_denied",
+                    "actor_id": "steward1",
+                    "actor_roles": ["model_steward"],
+                    "tenant": "tenant1",
+                    "trust_domain": "domain1",
+                    "classification": "confidential",
+                },
+            },
+        )
+
+        self.assertEqual(status, 403)
+        self.assertFalse(response["allowed"])
+        self.assertIn("immutable_endpoint_proof", response["reason"])
+
+    def test_audit_events_endpoint_returns_projected_read_only_events(self) -> None:
+        trace_id = "trace_audit_events_projection"
+        status, denied = self._post_json_with_status(
+            "/v1/models/execution-ticket",
+            {
+                "model_id": "unknown_model_for_audit_projection",
+                "context": {
+                    "trace_id": trace_id,
+                    "actor_id": "dev1",
+                    "actor_roles": ["developer"],
+                    "tenant": "tenant1",
+                    "trust_domain": "domain1",
+                    "classification": "confidential",
+                },
+            },
+        )
+        self.assertEqual(status, 403)
+        self.assertFalse(denied["allowed"])
+
+        events = self._get_json(
+            f"/v1/audit/events?trace_id={trace_id}&limit=25",
+        )
+        self.assertGreaterEqual(events["event_count"], 1)
+        first = events["events"][0]
+        self.assertIn("record_type", first)
+        self.assertIn("timestamp", first)
+        self.assertIn("source_journal", first)
+        self.assertIn("payload", first)
+        self.assertTrue(
+            any(item["record_type"] == "execution_ticket_denied" for item in events["events"]),
+        )
 
     def test_execution_ticket_endpoint_returns_signed_ticket(self) -> None:
         model_id = self._register_reviewed_model()
