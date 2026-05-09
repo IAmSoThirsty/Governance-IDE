@@ -20,7 +20,9 @@ PLACEHOLDER_PATTERN = re.compile(
     r"REPLACE|PLACEHOLDER|CHANGE_ME|replace-with|dummy|example-value",
     re.IGNORECASE,
 )
-LOCAL_IMAGE_PATTERN = re.compile(r"(^localhost[:/])|(^127\.0\.0\.1[:/])|(:local$)", re.IGNORECASE)
+LOCAL_IMAGE_PATTERN = re.compile(
+    r"(^localhost[:/])|(^127\.0\.0\.1[:/])|(:local$)", re.IGNORECASE
+)
 SENSITIVE_FIELD_PATTERN = re.compile(
     r"token|password|secret|private[_-]?key|signing[_-]?key",
     re.IGNORECASE,
@@ -117,17 +119,23 @@ def _safe_manifest_summary(manifest: Mapping[str, Any]) -> dict[str, Any]:
             manifest.get("ed25519_key_source_type") or "",
         ).strip(),
         "secret_source": str(manifest.get("secret_source") or "").strip(),
-        "artifact_store_backend": str(manifest.get("artifact_store_backend") or "").strip(),
+        "artifact_store_backend": str(
+            manifest.get("artifact_store_backend") or ""
+        ).strip(),
         "trainer_backend": str(manifest.get("trainer_backend") or "").strip(),
         "storage_backend": str(manifest.get("storage_backend") or "").strip(),
-        "audit_journal_backend": str(manifest.get("audit_journal_backend") or "").strip(),
+        "audit_journal_backend": str(
+            manifest.get("audit_journal_backend") or ""
+        ).strip(),
         "ci_run_id": str(manifest.get("ci_run_id") or "").strip(),
         "build_timestamp": str(manifest.get("build_timestamp") or "").strip(),
         "sbom_location": str(manifest.get("sbom_location") or "").strip(),
         "dependency_scan_result_location": str(
             manifest.get("dependency_scan_result_location") or "",
         ).strip(),
-        "dependency_scan_status": str(manifest.get("dependency_scan_status") or "").strip(),
+        "dependency_scan_status": str(
+            manifest.get("dependency_scan_status") or ""
+        ).strip(),
     }
 
 
@@ -168,7 +176,9 @@ def derive_artifact_store_backend(artifact_store_uri: str) -> str:
     return "custom"
 
 
-def _classify(issues: list[EvidenceIssue], overrides_active: tuple[str, ...]) -> tuple[bool, str, bool]:
+def _classify(
+    issues: list[EvidenceIssue], overrides_active: tuple[str, ...]
+) -> tuple[bool, str, bool]:
     if issues:
         categories = {issue.category for issue in issues}
         if CATEGORY_REPO_CODE_BLOCKED in categories:
@@ -194,7 +204,9 @@ def _append_issue(
     issues.append(EvidenceIssue(category=category, code=code, message=message))
 
 
-def _validate_manifest_fields(manifest: Mapping[str, Any], issues: list[EvidenceIssue]) -> None:
+def _validate_manifest_fields(
+    manifest: Mapping[str, Any], issues: list[EvidenceIssue]
+) -> None:
     for field in REQUIRED_MANIFEST_FIELDS:
         if field not in manifest:
             _append_issue(
@@ -222,7 +234,9 @@ def _validate_manifest_fields(manifest: Mapping[str, Any], issues: list[Evidence
                 message=f"production evidence manifest field looks placeholder-like: {field}",
             )
 
-    dependency_scan_status = str(manifest.get("dependency_scan_status") or "").strip().lower()
+    dependency_scan_status = (
+        str(manifest.get("dependency_scan_status") or "").strip().lower()
+    )
     if dependency_scan_status and dependency_scan_status != "pass":
         _append_issue(
             issues,
@@ -376,7 +390,9 @@ def evaluate_production_evidence(
                 code="secret_source_missing",
                 message="SOVEREIGN_SECRET_SOURCE is required for production evidence",
             )
-        elif _placeholder(secret_source) or re.search(r"local|dev|test", secret_source, re.IGNORECASE):
+        elif _placeholder(secret_source) or re.search(
+            r"local|dev|test", secret_source, re.IGNORECASE
+        ):
             _append_issue(
                 issues,
                 category=CATEGORY_ENVIRONMENT_BLOCKED,
@@ -485,7 +501,9 @@ def evaluate_production_evidence(
 
     manifest_path_resolved: Path | None = manifest_path
     if manifest_path_resolved is None:
-        env_manifest_path = _get_env(active_env, "SOVEREIGN_PRODUCTION_EVIDENCE_MANIFEST")
+        env_manifest_path = _get_env(
+            active_env, "SOVEREIGN_PRODUCTION_EVIDENCE_MANIFEST"
+        )
         if not env_manifest_path:
             env_manifest_path = _get_env(active_env, "SOVEREIGN_RELEASE_MANIFEST")
         if env_manifest_path:
@@ -521,70 +539,121 @@ def evaluate_production_evidence(
         else:
             _validate_manifest_fields(manifest_data, issues)
 
-            if strict_production_mode and image_ref and str(manifest_data.get("registry_image_ref") or "").strip() != image_ref:
+            if (
+                strict_production_mode
+                and image_ref
+                and str(manifest_data.get("registry_image_ref") or "").strip()
+                != image_ref
+            ):
                 _append_issue(
                     issues,
                     category=CATEGORY_PRODUCTION_EVIDENCE_BLOCKED,
                     code="manifest_image_ref_mismatch",
                     message="manifest registry_image_ref does not match SOVEREIGN_IMAGE_REF",
                 )
-            if strict_production_mode and image_digest and str(manifest_data.get("image_digest") or "").strip() != image_digest:
+            if (
+                strict_production_mode
+                and image_digest
+                and str(manifest_data.get("image_digest") or "").strip() != image_digest
+            ):
                 _append_issue(
                     issues,
                     category=CATEGORY_PRODUCTION_EVIDENCE_BLOCKED,
                     code="manifest_image_digest_mismatch",
                     message="manifest image_digest does not match SOVEREIGN_IMAGE_DIGEST",
                 )
-            if strict_production_mode and runtime_mode and str(manifest_data.get("runtime_mode") or "").strip().lower() != runtime_mode:
+            if (
+                strict_production_mode
+                and runtime_mode
+                and str(manifest_data.get("runtime_mode") or "").strip().lower()
+                != runtime_mode
+            ):
                 _append_issue(
                     issues,
                     category=CATEGORY_PRODUCTION_EVIDENCE_BLOCKED,
                     code="manifest_runtime_mode_mismatch",
                     message="manifest runtime_mode does not match SOVEREIGN_RUNTIME_MODE",
                 )
-            if strict_production_mode and signer_backend and str(manifest_data.get("signer_type") or "").strip().lower() != signer_backend:
+            if (
+                strict_production_mode
+                and signer_backend
+                and str(manifest_data.get("signer_type") or "").strip().lower()
+                != signer_backend
+            ):
                 _append_issue(
                     issues,
                     category=CATEGORY_PRODUCTION_EVIDENCE_BLOCKED,
                     code="manifest_signer_type_mismatch",
                     message="manifest signer_type does not match SOVEREIGN_SIGNER_BACKEND",
                 )
-            if strict_production_mode and key_source_type and str(manifest_data.get("ed25519_key_source_type") or "").strip() != key_source_type:
+            if (
+                strict_production_mode
+                and key_source_type
+                and str(manifest_data.get("ed25519_key_source_type") or "").strip()
+                != key_source_type
+            ):
                 _append_issue(
                     issues,
                     category=CATEGORY_PRODUCTION_EVIDENCE_BLOCKED,
                     code="manifest_key_source_mismatch",
                     message="manifest ed25519_key_source_type does not match runtime key source",
                 )
-            if strict_production_mode and secret_source and str(manifest_data.get("secret_source") or "").strip() != secret_source:
+            if (
+                strict_production_mode
+                and secret_source
+                and str(manifest_data.get("secret_source") or "").strip()
+                != secret_source
+            ):
                 _append_issue(
                     issues,
                     category=CATEGORY_PRODUCTION_EVIDENCE_BLOCKED,
                     code="manifest_secret_source_mismatch",
                     message="manifest secret_source does not match SOVEREIGN_SECRET_SOURCE",
                 )
-            if strict_production_mode and trainer_backend and str(manifest_data.get("trainer_backend") or "").strip() != trainer_backend:
+            if (
+                strict_production_mode
+                and trainer_backend
+                and str(manifest_data.get("trainer_backend") or "").strip()
+                != trainer_backend
+            ):
                 _append_issue(
                     issues,
                     category=CATEGORY_PRODUCTION_EVIDENCE_BLOCKED,
                     code="manifest_trainer_backend_mismatch",
                     message="manifest trainer_backend does not match SOVEREIGN_TRAINING_BACKEND",
                 )
-            if strict_production_mode and state_backend and str(manifest_data.get("storage_backend") or "").strip() != state_backend:
+            if (
+                strict_production_mode
+                and state_backend
+                and str(manifest_data.get("storage_backend") or "").strip()
+                != state_backend
+            ):
                 _append_issue(
                     issues,
                     category=CATEGORY_PRODUCTION_EVIDENCE_BLOCKED,
                     code="manifest_storage_backend_mismatch",
                     message="manifest storage_backend does not match SOVEREIGN_STATE_BACKEND",
                 )
-            if strict_production_mode and journal_backend and str(manifest_data.get("audit_journal_backend") or "").strip().lower() != journal_backend:
+            if (
+                strict_production_mode
+                and journal_backend
+                and str(manifest_data.get("audit_journal_backend") or "")
+                .strip()
+                .lower()
+                != journal_backend
+            ):
                 _append_issue(
                     issues,
                     category=CATEGORY_PRODUCTION_EVIDENCE_BLOCKED,
                     code="manifest_audit_backend_mismatch",
                     message="manifest audit_journal_backend does not match SOVEREIGN_JOURNAL_BACKEND",
                 )
-            if strict_production_mode and artifact_store_backend and str(manifest_data.get("artifact_store_backend") or "").strip() != artifact_store_backend:
+            if (
+                strict_production_mode
+                and artifact_store_backend
+                and str(manifest_data.get("artifact_store_backend") or "").strip()
+                != artifact_store_backend
+            ):
                 _append_issue(
                     issues,
                     category=CATEGORY_PRODUCTION_EVIDENCE_BLOCKED,
@@ -603,7 +672,11 @@ def evaluate_production_evidence(
                 warnings.append("unable to resolve git commit for manifest comparison")
 
             manifest_commit = str(manifest_data.get("release_commit") or "").strip()
-            if head_commit and manifest_commit and not head_commit.startswith(manifest_commit):
+            if (
+                head_commit
+                and manifest_commit
+                and not head_commit.startswith(manifest_commit)
+            ):
                 _append_issue(
                     issues,
                     category=CATEGORY_PRODUCTION_EVIDENCE_BLOCKED,
@@ -611,7 +684,10 @@ def evaluate_production_evidence(
                     message="manifest release_commit does not match current git commit",
                 )
 
-            if str(manifest_data.get("dependency_scan_status") or "").strip().lower() == "pass":
+            if (
+                str(manifest_data.get("dependency_scan_status") or "").strip().lower()
+                == "pass"
+            ):
                 dep_scan_ref = str(
                     manifest_data.get("dependency_scan_result_location") or "",
                 ).strip()
@@ -657,8 +733,10 @@ def safe_runtime_evidence_status(
     return {
         **result.to_primitive(),
         "runtime_mode": _get_env(active_env, "SOVEREIGN_RUNTIME_MODE") or "local",
-        "signer_backend": _get_env(active_env, "SOVEREIGN_SIGNER_BACKEND") or "hmac-dev",
-        "journal_backend": _get_env(active_env, "SOVEREIGN_JOURNAL_BACKEND") or "sqlite",
+        "signer_backend": _get_env(active_env, "SOVEREIGN_SIGNER_BACKEND")
+        or "hmac-dev",
+        "journal_backend": _get_env(active_env, "SOVEREIGN_JOURNAL_BACKEND")
+        or "sqlite",
         "artifact_store_backend": derive_artifact_store_backend(
             _get_env(active_env, "SOVEREIGN_TRAINING_ARTIFACT_STORE"),
         ),
@@ -669,7 +747,9 @@ def safe_runtime_evidence_status(
 def _parse_args() -> Any:
     import argparse
 
-    parser = argparse.ArgumentParser(description="Validate sovereign production evidence contract")
+    parser = argparse.ArgumentParser(
+        description="Validate sovereign production evidence contract"
+    )
     parser.add_argument("--workspace-root", required=True)
     parser.add_argument("--manifest-path", default="")
     parser.add_argument("--allow-local-env-file", action="store_true")

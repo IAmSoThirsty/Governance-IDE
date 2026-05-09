@@ -19,7 +19,9 @@ class ProductionReadinessGateContractTests(unittest.TestCase):
     def test_rehearsal_output_is_explicit_and_non_production(self) -> None:
         content = GATE_SCRIPT.read_text(encoding="utf-8")
 
-        self.assertIn("Rehearsal override gate passed (no production-readiness claim)", content)
+        self.assertIn(
+            "Rehearsal override gate passed (no production-readiness claim)", content
+        )
         self.assertIn("Active overrides", content)
         self.assertIn("Overridden evidence", content)
 

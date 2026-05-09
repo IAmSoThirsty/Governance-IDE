@@ -121,13 +121,10 @@ class GovernedModelRegistry:
             metadata=normalized_metadata,
         )
 
-        digest = (
-            content_hash
-            or self._derive_content_hash(
-                source_type=source_type,
-                source=source,
-                immutable_identifier=immutable_identifier,
-            )
+        digest = content_hash or self._derive_content_hash(
+            source_type=source_type,
+            source=source,
+            immutable_identifier=immutable_identifier,
         )
         if not self._valid_hash(digest):
             raise ValueError("content_hash must be a sha256 hex digest")
@@ -178,10 +175,28 @@ class GovernedModelRegistry:
             "registry_schema_version": REGISTRY_SCHEMA_VERSION,
         }
         signature = signer.sign(unsigned) if signer else None
+
+        model_id = str(unsigned["model_id"])
+        license_value = str(unsigned["license"])
+        content_hash_value = str(unsigned["content_hash"])
+        registered_at_value = str(unsigned["registered_at"])
+
         record = GovernedModelRecord(
+            model_id=model_id,
+            source_type=source_type,
+            source=source,
+            license=license_value,
+            content_hash=content_hash_value,
+            immutable_identifier=resolved_immutable_identifier,
+            metadata=normalized_metadata,
+            trust_level=trust_level,
+            policy_profile=policy_profile,
+            provenance_ref=provenance_ref,
+            admissibility_status=admissibility_status,
             signature=signature,
             signature_status="signed" if signature else "unsigned",
-            **{key: value for key, value in unsigned.items() if key != "signature_status"},
+            registered_at=registered_at_value,
+            registry_schema_version=REGISTRY_SCHEMA_VERSION,
         )
         self._state["models"][record.model_id] = to_primitive(record)
         self._state["immutable_index"][record.immutable_identifier] = record.model_id
@@ -406,7 +421,9 @@ class GovernedModelRegistry:
 
     @staticmethod
     def _valid_hash(value: str) -> bool:
-        return len(value) == 64 and all(char in "0123456789abcdefABCDEF" for char in value)
+        return len(value) == 64 and all(
+            char in "0123456789abcdefABCDEF" for char in value
+        )
 
     def _save(self) -> None:
         self.path.write_text(
@@ -427,9 +444,7 @@ def _iter_stable_files(root: Path) -> list[Path]:
     files: list[Path] = []
     for current_root, dirnames, filenames in root.walk(top_down=True):
         dirnames[:] = sorted(
-            dirname
-            for dirname in dirnames
-            if not _is_transient_directory(dirname)
+            dirname for dirname in dirnames if not _is_transient_directory(dirname)
         )
         for filename in sorted(filenames):
             if _is_transient_file(filename):

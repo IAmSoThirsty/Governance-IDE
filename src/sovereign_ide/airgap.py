@@ -241,9 +241,7 @@ class AirgapBundleGuard:
             "target_domain": manifest.target_domain,
             "classification": manifest.classification,
             "item_count": len(manifest.items),
-            "approval_decision_record_id": (
-                manifest.approval.decision_record_id
-            ),
+            "approval_decision_record_id": (manifest.approval.decision_record_id),
         }
         state["bundles"].append(record)
         mirror_path.write_text(

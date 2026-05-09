@@ -39,16 +39,11 @@ class EvaluationHarness:
     ) -> tuple[CapabilityMetrics, AssuranceMetrics]:
         total = max(len(session_events), 1)
 
-        accepted = sum(
-            1 for item in session_events if item.get("accepted", False)
-        )
-        completed = sum(
-            1 for item in session_events if item.get("completed", False)
-        )
+        accepted = sum(1 for item in session_events if item.get("accepted", False))
+        completed = sum(1 for item in session_events if item.get("completed", False))
 
         relevance_values = [
-            float(item.get("retrieval_relevance", 0.0))
-            for item in session_events
+            float(item.get("retrieval_relevance", 0.0)) for item in session_events
         ]
         latencies = sorted(
             float(item.get("latency_ms", 0.0)) for item in session_events
@@ -66,14 +61,10 @@ class EvaluationHarness:
         )
 
         unauthorized = sum(
-            1
-            for item in session_events
-            if item.get("unauthorized_action", False)
+            1 for item in session_events if item.get("unauthorized_action", False)
         )
         injection_attempts = sum(
-            1
-            for item in session_events
-            if item.get("injection_attempt", False)
+            1 for item in session_events if item.get("injection_attempt", False)
         )
         injection_blocked = sum(
             1
@@ -81,23 +72,16 @@ class EvaluationHarness:
             if item.get("injection_attempt", False)
             and item.get("injection_blocked", False)
         )
-        leakages = sum(
-            1 for item in session_events if item.get("secret_leak", False)
-        )
+        leakages = sum(1 for item in session_events if item.get("secret_leak", False))
         bypasses = sum(
-            1
-            for item in session_events
-            if item.get("policy_bypass_attempt", False)
+            1 for item in session_events if item.get("policy_bypass_attempt", False)
         )
         provenance_ok = sum(
-            1
-            for item in session_events
-            if item.get("provenance_correct", False)
+            1 for item in session_events if item.get("provenance_correct", False)
         )
 
         operator_confidence = [
-            float(item.get("operator_confidence", 0.0))
-            for item in session_events
+            float(item.get("operator_confidence", 0.0)) for item in session_events
         ]
         model_confidence = [
             float(item.get("model_confidence", 0.0)) for item in session_events
@@ -105,8 +89,7 @@ class EvaluationHarness:
         confidence_gap = 0.0
         if operator_confidence and model_confidence:
             gap_values = [
-                abs(op - mod)
-                for op, mod in zip(operator_confidence, model_confidence)
+                abs(op - mod) for op, mod in zip(operator_confidence, model_confidence)
             ]
             confidence_gap = mean(gap_values)
 

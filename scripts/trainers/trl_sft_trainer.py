@@ -34,7 +34,10 @@ def _validate_governed_training_request(request: dict) -> dict:
     if not isinstance(governance, dict):
         raise ValueError("governance_metadata is required")
 
-    if _require_non_empty(governance.get("mode"), "governance_metadata.mode") != "actual_training":
+    if (
+        _require_non_empty(governance.get("mode"), "governance_metadata.mode")
+        != "actual_training"
+    ):
         raise ValueError("trainer accepts only governed actual_training mode")
 
     required_fields = (
@@ -72,9 +75,12 @@ def _validate_governed_training_request(request: dict) -> dict:
                 reference.get(required),
                 f"dataset_references[{index}].{required}",
             )
-        if not str(reference.get("dataset_hash", "")).strip() and not str(
-            reference.get("dataset_immutable_ref", ""),
-        ).strip():
+        if (
+            not str(reference.get("dataset_hash", "")).strip()
+            and not str(
+                reference.get("dataset_immutable_ref", ""),
+            ).strip()
+        ):
             raise ValueError(
                 "dataset_references entries require dataset_hash "
                 "or dataset_immutable_ref",
@@ -140,13 +146,33 @@ def main() -> int:
     )
     parser.add_argument("--request", required=True)
     parser.add_argument("--output", required=True)
-    parser.add_argument("--epochs", type=float, default=float(os.getenv("SOVEREIGN_TRAIN_EPOCHS", "1")))
-    parser.add_argument("--max-steps", type=int, default=int(os.getenv("SOVEREIGN_TRAIN_MAX_STEPS", "-1")))
-    parser.add_argument("--learning-rate", type=float, default=float(os.getenv("SOVEREIGN_TRAIN_LR", "0.0002")))
-    parser.add_argument("--max-length", type=int, default=int(os.getenv("SOVEREIGN_TRAIN_MAX_LENGTH", "1024")))
-    parser.add_argument("--lora-r", type=int, default=int(os.getenv("SOVEREIGN_LORA_R", "16")))
-    parser.add_argument("--lora-alpha", type=int, default=int(os.getenv("SOVEREIGN_LORA_ALPHA", "32")))
-    parser.add_argument("--hub-model-id", default=os.getenv("SOVEREIGN_HUB_MODEL_ID", ""))
+    parser.add_argument(
+        "--epochs", type=float, default=float(os.getenv("SOVEREIGN_TRAIN_EPOCHS", "1"))
+    )
+    parser.add_argument(
+        "--max-steps",
+        type=int,
+        default=int(os.getenv("SOVEREIGN_TRAIN_MAX_STEPS", "-1")),
+    )
+    parser.add_argument(
+        "--learning-rate",
+        type=float,
+        default=float(os.getenv("SOVEREIGN_TRAIN_LR", "0.0002")),
+    )
+    parser.add_argument(
+        "--max-length",
+        type=int,
+        default=int(os.getenv("SOVEREIGN_TRAIN_MAX_LENGTH", "1024")),
+    )
+    parser.add_argument(
+        "--lora-r", type=int, default=int(os.getenv("SOVEREIGN_LORA_R", "16"))
+    )
+    parser.add_argument(
+        "--lora-alpha", type=int, default=int(os.getenv("SOVEREIGN_LORA_ALPHA", "32"))
+    )
+    parser.add_argument(
+        "--hub-model-id", default=os.getenv("SOVEREIGN_HUB_MODEL_ID", "")
+    )
     args = parser.parse_args()
 
     request = json.loads(Path(args.request).read_text(encoding="utf-8"))
@@ -157,7 +183,11 @@ def main() -> int:
 
     records = _load_records(list(request["dataset_paths"]))
     dataset = Dataset.from_list(records)
-    split = dataset.train_test_split(test_size=0.1, seed=42) if len(dataset) > 10 else {"train": dataset, "test": None}
+    split = (
+        dataset.train_test_split(test_size=0.1, seed=42)
+        if len(dataset) > 10
+        else {"train": dataset, "test": None}
+    )
 
     push_to_hub = bool(args.hub_model_id)
     trainer = SFTTrainer(
@@ -201,7 +231,9 @@ def main() -> int:
         if push_to_hub
         else output_dir.as_uri()
     )
-    if artifact_store_uri and artifact_uri.rstrip("/") != artifact_store_uri.rstrip("/"):
+    if artifact_store_uri and artifact_uri.rstrip("/") != artifact_store_uri.rstrip(
+        "/"
+    ):
         raise RuntimeError(
             "pushed artifact URI does not match requested artifact store",
         )

@@ -28,10 +28,7 @@ def render_workspace_root(value: Any, workspace_root: str | Path) -> Any:
     if isinstance(value, list):
         return [render_workspace_root(item, root) for item in value]
     if isinstance(value, dict):
-        return {
-            key: render_workspace_root(item, root)
-            for key, item in value.items()
-        }
+        return {key: render_workspace_root(item, root) for key, item in value.items()}
     return value
 
 

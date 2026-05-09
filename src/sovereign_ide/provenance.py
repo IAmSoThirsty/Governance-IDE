@@ -67,10 +67,7 @@ class ProvenanceGraph:
         trace_id: str,
         attributes: dict[str, Any] | None = None,
     ) -> ProvenanceEdge:
-        if (
-            source not in self._state["nodes"]
-            or target not in self._state["nodes"]
-        ):
+        if source not in self._state["nodes"] or target not in self._state["nodes"]:
             raise ValueError("source and target nodes must exist")
 
         edge = ProvenanceEdge(
@@ -92,11 +89,7 @@ class ProvenanceGraph:
             for node_id, node in self._state["nodes"].items()
             if node["trace_id"] == trace_id
         }
-        edges = [
-            edge
-            for edge in self._state["edges"]
-            if edge["trace_id"] == trace_id
-        ]
+        edges = [edge for edge in self._state["edges"] if edge["trace_id"] == trace_id]
         return {"nodes": nodes, "edges": edges}
 
     def artifact_lineage(self, artifact_id: str) -> dict[str, Any]:

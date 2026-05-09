@@ -79,11 +79,7 @@ class CapabilityToken:
     def is_active(self, at_time: str | None = None) -> bool:
         if self.revoked:
             return False
-        now = (
-            datetime.fromisoformat(at_time)
-            if at_time
-            else datetime.now(timezone.utc)
-        )
+        now = datetime.fromisoformat(at_time) if at_time else datetime.now(timezone.utc)
         expires = datetime.fromisoformat(self.expires_at)
         return now < expires
 

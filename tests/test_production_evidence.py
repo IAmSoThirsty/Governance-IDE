@@ -27,7 +27,10 @@ class ProductionEvidenceValidationTests(unittest.TestCase):
         self.workspace_root = Path(self.temp_dir.name).resolve()
         self.key_path = self.workspace_root / "keys" / "ed25519_private.pem"
         self.key_path.parent.mkdir(parents=True, exist_ok=True)
-        self.key_path.write_text("-----BEGIN PRIVATE KEY-----\nFAKE\n-----END PRIVATE KEY-----", encoding="utf-8")
+        self.key_path.write_text(
+            "-----BEGIN PRIVATE KEY-----\nFAKE\n-----END PRIVATE KEY-----",
+            encoding="utf-8",
+        )
 
         self.manifest_path = self.workspace_root / "production_evidence_manifest.json"
         self.manifest_path.write_text(
@@ -100,7 +103,9 @@ class ProductionEvidenceValidationTests(unittest.TestCase):
         )
         self.assertFalse(result.allowed)
         self.assertEqual(result.classification, CATEGORY_PRODUCTION_EVIDENCE_BLOCKED)
-        self.assertTrue(any(issue.code == "manifest_not_found" for issue in result.issues))
+        self.assertTrue(
+            any(issue.code == "manifest_not_found" for issue in result.issues)
+        )
 
     def test_local_image_denied_for_production(self) -> None:
         result = evaluate_production_evidence(
@@ -120,7 +125,9 @@ class ProductionEvidenceValidationTests(unittest.TestCase):
         )
         self.assertFalse(result.allowed)
         self.assertEqual(result.classification, CATEGORY_ENVIRONMENT_BLOCKED)
-        self.assertTrue(any(issue.code == "image_digest_missing" for issue in result.issues))
+        self.assertTrue(
+            any(issue.code == "image_digest_missing" for issue in result.issues)
+        )
 
     def test_hmac_dev_denied_for_production(self) -> None:
         result = evaluate_production_evidence(
@@ -130,17 +137,24 @@ class ProductionEvidenceValidationTests(unittest.TestCase):
         )
         self.assertFalse(result.allowed)
         self.assertEqual(result.classification, CATEGORY_ENVIRONMENT_BLOCKED)
-        self.assertTrue(any(issue.code == "signer_backend_not_ed25519" for issue in result.issues))
+        self.assertTrue(
+            any(issue.code == "signer_backend_not_ed25519" for issue in result.issues)
+        )
 
     def test_missing_ed25519_evidence_denied(self) -> None:
         result = evaluate_production_evidence(
             workspace_root=self.workspace_root,
-            env=self._env(SOVEREIGN_ED25519_PRIVATE_KEY_PATH="", SOVEREIGN_ED25519_PRIVATE_KEY_PEM=""),
+            env=self._env(
+                SOVEREIGN_ED25519_PRIVATE_KEY_PATH="",
+                SOVEREIGN_ED25519_PRIVATE_KEY_PEM="",
+            ),
             manifest_path=self.manifest_path,
         )
         self.assertFalse(result.allowed)
         self.assertEqual(result.classification, CATEGORY_ENVIRONMENT_BLOCKED)
-        self.assertTrue(any(issue.code == "ed25519_key_source_missing" for issue in result.issues))
+        self.assertTrue(
+            any(issue.code == "ed25519_key_source_missing" for issue in result.issues)
+        )
 
     def test_rehearsal_override_is_explicit_and_non_production(self) -> None:
         result = evaluate_production_evidence(
@@ -160,7 +174,9 @@ class ProductionEvidenceValidationTests(unittest.TestCase):
 
     def test_dependency_security_failure_classification(self) -> None:
         manifest_with_failed_scan = self._manifest(dependency_scan_status="fail")
-        self.manifest_path.write_text(json.dumps(manifest_with_failed_scan), encoding="utf-8")
+        self.manifest_path.write_text(
+            json.dumps(manifest_with_failed_scan), encoding="utf-8"
+        )
 
         result = evaluate_production_evidence(
             workspace_root=self.workspace_root,
@@ -169,7 +185,12 @@ class ProductionEvidenceValidationTests(unittest.TestCase):
         )
         self.assertFalse(result.allowed)
         self.assertEqual(result.classification, CATEGORY_DEPENDENCY_SECURITY_BLOCKED)
-        self.assertTrue(any(issue.code.startswith("dependency_scan_status") for issue in result.issues))
+        self.assertTrue(
+            any(
+                issue.code.startswith("dependency_scan_status")
+                for issue in result.issues
+            )
+        )
 
 
 if __name__ == "__main__":

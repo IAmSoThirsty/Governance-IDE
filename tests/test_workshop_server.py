@@ -197,9 +197,7 @@ class WorkshopServerTests(unittest.TestCase):
                 execution_mode="simulated",
                 simulation_smoke_test=True,
             )
-            checkpoint_id = train_result["payload"]["checkpoint"][
-                "checkpoint_id"
-            ]
+            checkpoint_id = train_result["payload"]["checkpoint"]["checkpoint_id"]
 
             eval_result = self.workshop.run_shadow_evaluation(
                 context=self._context(
@@ -398,7 +396,9 @@ class WorkshopServerTests(unittest.TestCase):
         base_model_id = self._register_base_model()
         base_ticket, _ = self._issue_base_model_ticket(base_model_id)
 
-        dataset_index = json.loads(self.workshop.paths.dataset_index.read_text(encoding="utf-8"))
+        dataset_index = json.loads(
+            self.workshop.paths.dataset_index.read_text(encoding="utf-8")
+        )
         dataset_path = Path(dataset_index["datasets"][0]["path"])
         payload = json.loads(dataset_path.read_text(encoding="utf-8"))
         payload.setdefault("governance", {})["provenance_ref"] = ""
@@ -463,12 +463,16 @@ class WorkshopServerTests(unittest.TestCase):
             )
         self.assertIn("policy_profile_missing", str(raised.exception))
 
-    def test_actual_training_denied_when_mutable_dataset_lacks_immutable_proof(self) -> None:
+    def test_actual_training_denied_when_mutable_dataset_lacks_immutable_proof(
+        self,
+    ) -> None:
         dataset_ids = self._bootstrap_and_prepare_datasets()
         base_model_id = self._register_base_model()
         base_ticket, _ = self._issue_base_model_ticket(base_model_id)
 
-        dataset_index = json.loads(self.workshop.paths.dataset_index.read_text(encoding="utf-8"))
+        dataset_index = json.loads(
+            self.workshop.paths.dataset_index.read_text(encoding="utf-8")
+        )
         dataset_path = Path(dataset_index["datasets"][0]["path"])
         payload = json.loads(dataset_path.read_text(encoding="utf-8"))
         governance = payload.setdefault("governance", {})
@@ -752,7 +756,9 @@ class WorkshopServerTests(unittest.TestCase):
             "https://huggingface.co/example/model",
         )
 
-    def test_failed_actual_training_records_failure_and_skips_checkpoint_registration(self) -> None:
+    def test_failed_actual_training_records_failure_and_skips_checkpoint_registration(
+        self,
+    ) -> None:
         dataset_ids = self._bootstrap_and_prepare_datasets()
         base_model_id = self._register_base_model()
         base_ticket, _ = self._issue_base_model_ticket(base_model_id)
@@ -822,7 +828,10 @@ class WorkshopServerTests(unittest.TestCase):
         )
         self.assertFalse(decision.allowed)
         self.assertTrue(
-            any(reason.startswith("unauthorized_syscalls") for reason in decision.reasons),
+            any(
+                reason.startswith("unauthorized_syscalls")
+                for reason in decision.reasons
+            ),
         )
 
     def test_repair_unit_register_and_apply(self) -> None:

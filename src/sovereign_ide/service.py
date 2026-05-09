@@ -181,9 +181,7 @@ def verify_execution_ticket(
         return False, "ticket_expired"
 
     unsigned_payload = {
-        key: value
-        for key, value in ticket.items()
-        if key != "signature"
+        key: value for key, value in ticket.items() if key != "signature"
     }
     if not signer.verify(unsigned_payload, envelope):
         return False, "signature_invalid"
@@ -197,14 +195,14 @@ def _extract_denial_reason(reason: str) -> str:
         return reason.split(marker, 1)[1]
     mutation_prefix = "mutation_execution_failed:"
     if reason.startswith(mutation_prefix):
-        return reason[len(mutation_prefix):]
+        return reason[len(mutation_prefix) :]
     return reason
 
 
 def _extract_mutation_failure_reason(reason: str) -> str:
     mutation_prefix = "mutation_execution_failed:"
     if reason.startswith(mutation_prefix):
-        return reason[len(mutation_prefix):]
+        return reason[len(mutation_prefix) :]
     return reason
 
 
@@ -287,7 +285,22 @@ def _first_non_empty(*values: Any) -> str | None:
     return None
 
 
-def _project_audit_event(entry: dict[str, Any], *, source_journal: str) -> dict[str, Any]:
+def _as_str_any_dict(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    return {str(key): item for key, item in value.items()}
+
+
+def _ticket_signature_payload(ticket: dict[str, Any]) -> dict[str, Any] | None:
+    signature_raw = ticket.get("signature")
+    if not isinstance(signature_raw, dict):
+        return None
+    return {str(key): item for key, item in signature_raw.items()}
+
+
+def _project_audit_event(
+    entry: dict[str, Any], *, source_journal: str
+) -> dict[str, Any]:
     payload = entry.get("payload")
     payload_map = payload if isinstance(payload, dict) else {}
     details = payload_map.get("details")
@@ -381,8 +394,7 @@ def list_audit_events(
         for item in entries
         if (not normalized_trace or item["trace_id"] == normalized_trace)
         and (
-            not normalized_record_type
-            or item["record_type"] == normalized_record_type
+            not normalized_record_type or item["record_type"] == normalized_record_type
         )
     ]
     filtered.sort(key=lambda item: str(item.get("timestamp", "")), reverse=True)
@@ -529,9 +541,7 @@ def request_execution_ticket(
         scopes=("execute_model",),
         trust_domain=context.trust_domain,
         issued_at=utc_now(),
-        expires_at=(
-            datetime.now(timezone.utc) + timedelta(minutes=15)
-        ).isoformat(),
+        expires_at=(datetime.now(timezone.utc) + timedelta(minutes=15)).isoformat(),
         revoked=False,
     )
 
@@ -611,8 +621,8 @@ def request_execution_ticket(
             status_code=403,
         )
 
-    payload = dict(result.payload or {})
-    ticket = dict(payload.get("execution_ticket") or {})
+    payload = _as_str_any_dict(result.payload)
+    ticket = _as_str_any_dict(payload.get("execution_ticket"))
     runtime.journal.append(
         "execution_ticket_issued",
         context.trace_id,
@@ -631,11 +641,7 @@ def request_execution_ticket(
         issued_at=str(ticket.get("issued_at") or ""),
         expires_at=str(ticket.get("expires_at") or ""),
         signer_type=str(ticket.get("signer_type") or type(runtime.signer).__name__),
-        signature=(
-            dict(ticket.get("signature"))
-            if isinstance(ticket.get("signature"), dict)
-            else None
-        ),
+        signature=_ticket_signature_payload(ticket),
         ticket_id=str(ticket.get("ticket_id") or ""),
         governance_decision_hash=decision_hash,
         evaluation=to_primitive(evaluation),
@@ -709,11 +715,7 @@ def inspect_execution_ticket(
             issued_at=str(ticket.get("issued_at") or ""),
             expires_at=str(ticket.get("expires_at") or ""),
             signer_type=str(ticket.get("signer_type") or ""),
-            signature=(
-                dict(ticket.get("signature"))
-                if isinstance(ticket.get("signature"), dict)
-                else None
-            ),
+            signature=_ticket_signature_payload(ticket),
             ticket_id=str(ticket.get("ticket_id") or ""),
             governance_decision_hash=None,
             evaluation=None,
@@ -745,11 +747,7 @@ def inspect_execution_ticket(
             issued_at=str(ticket.get("issued_at") or ""),
             expires_at=str(ticket.get("expires_at") or ""),
             signer_type=str(ticket.get("signer_type") or ""),
-            signature=(
-                dict(ticket.get("signature"))
-                if isinstance(ticket.get("signature"), dict)
-                else None
-            ),
+            signature=_ticket_signature_payload(ticket),
             ticket_id=str(ticket.get("ticket_id") or ""),
             governance_decision_hash=None,
             evaluation=None,
@@ -777,11 +775,7 @@ def inspect_execution_ticket(
             issued_at=str(ticket.get("issued_at") or ""),
             expires_at=str(ticket.get("expires_at") or ""),
             signer_type=str(ticket.get("signer_type") or ""),
-            signature=(
-                dict(ticket.get("signature"))
-                if isinstance(ticket.get("signature"), dict)
-                else None
-            ),
+            signature=_ticket_signature_payload(ticket),
             ticket_id=str(ticket.get("ticket_id") or ""),
             governance_decision_hash=None,
             evaluation=None,
@@ -807,11 +801,7 @@ def inspect_execution_ticket(
         issued_at=str(ticket.get("issued_at") or ""),
         expires_at=str(ticket.get("expires_at") or ""),
         signer_type=str(ticket.get("signer_type") or type(runtime.signer).__name__),
-        signature=(
-            dict(ticket.get("signature"))
-            if isinstance(ticket.get("signature"), dict)
-            else None
-        ),
+        signature=_ticket_signature_payload(ticket),
         ticket_id=str(ticket.get("ticket_id") or ""),
         governance_decision_hash=None,
         evaluation=None,
@@ -1131,7 +1121,9 @@ def make_handler(workspace_root: str | Path) -> type[BaseHTTPRequestHandler]:
             def _mutate() -> dict[str, Any]:
                 resolved_content_hash = content_hash
                 if source_type == "local_path" and not resolved_content_hash:
-                    resolved_content_hash = GovernedModelRegistry.hash_local_path(source)
+                    resolved_content_hash = GovernedModelRegistry.hash_local_path(
+                        source
+                    )
 
                 registry = GovernedModelRegistry(settings.model_registry_path)
                 record = registry.register(
@@ -1282,11 +1274,7 @@ def make_handler(workspace_root: str | Path) -> type[BaseHTTPRequestHandler]:
             at_time_raw = body.get("at_time")
             at_time = str(at_time_raw).strip() if at_time_raw is not None else None
             trace_id_raw = body.get("trace_id")
-            trace_id = (
-                str(trace_id_raw).strip()
-                if trace_id_raw is not None
-                else None
-            )
+            trace_id = str(trace_id_raw).strip() if trace_id_raw is not None else None
             response = inspect_execution_ticket(
                 root,
                 ticket=ticket,
@@ -1339,8 +1327,12 @@ def make_handler(workspace_root: str | Path) -> type[BaseHTTPRequestHandler]:
                 dataset_source_type=self._optional_str(body.get("dataset_source_type")),
                 dataset_license=self._optional_str(body.get("dataset_license")),
                 dataset_hash=self._optional_str(body.get("dataset_hash")),
-                dataset_immutable_ref=self._optional_str(body.get("dataset_immutable_ref")),
-                dataset_immutable_proof=self._optional_str(body.get("dataset_immutable_proof")),
+                dataset_immutable_ref=self._optional_str(
+                    body.get("dataset_immutable_ref")
+                ),
+                dataset_immutable_proof=self._optional_str(
+                    body.get("dataset_immutable_proof")
+                ),
                 policy_profile=self._optional_str(body.get("policy_profile")),
                 trust_level=str(body.get("trust_level") or "reviewed"),
             )
@@ -1373,7 +1365,9 @@ def make_handler(workspace_root: str | Path) -> type[BaseHTTPRequestHandler]:
                     quorum_proof=str(body.get("quorum_proof") or ""),
                     execution_mode=str(body.get("execution_mode") or "actual"),
                     training_command=self._optional_str(body.get("training_command")),
-                    simulation_smoke_test=bool(body.get("simulation_smoke_test", False)),
+                    simulation_smoke_test=bool(
+                        body.get("simulation_smoke_test", False)
+                    ),
                     base_model_id=self._optional_str(body.get("base_model_id")),
                     base_model_execution_ticket=(
                         self._require_mapping(
@@ -1387,15 +1381,25 @@ def make_handler(workspace_root: str | Path) -> type[BaseHTTPRequestHandler]:
                         body.get("base_model_admissibility_decision_id"),
                     ),
                     dataset_ref=self._optional_str(body.get("dataset_ref")),
-                    dataset_provenance=self._optional_str(body.get("dataset_provenance")),
-                    dataset_source_type=self._optional_str(body.get("dataset_source_type")),
+                    dataset_provenance=self._optional_str(
+                        body.get("dataset_provenance")
+                    ),
+                    dataset_source_type=self._optional_str(
+                        body.get("dataset_source_type")
+                    ),
                     dataset_license=self._optional_str(body.get("dataset_license")),
                     dataset_hash=self._optional_str(body.get("dataset_hash")),
-                    dataset_immutable_ref=self._optional_str(body.get("dataset_immutable_ref")),
-                    dataset_immutable_proof=self._optional_str(body.get("dataset_immutable_proof")),
+                    dataset_immutable_ref=self._optional_str(
+                        body.get("dataset_immutable_ref")
+                    ),
+                    dataset_immutable_proof=self._optional_str(
+                        body.get("dataset_immutable_proof")
+                    ),
                     policy_profile=self._optional_str(body.get("policy_profile")),
                     trust_level=str(body.get("trust_level") or "reviewed"),
-                    artifact_store_uri=self._optional_str(body.get("artifact_store_uri")),
+                    artifact_store_uri=self._optional_str(
+                        body.get("artifact_store_uri")
+                    ),
                     trainer_backend=self._optional_str(body.get("training_backend")),
                 )
             except PolicyViolation as exc:
@@ -1407,7 +1411,7 @@ def make_handler(workspace_root: str | Path) -> type[BaseHTTPRequestHandler]:
                     "training_execution_failed:",
                 ):
                     if reason.startswith(prefix):
-                        reason = reason[len(prefix):]
+                        reason = reason[len(prefix) :]
                 self._send_json(
                     {
                         "allowed": False,

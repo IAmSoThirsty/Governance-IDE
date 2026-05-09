@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import hashlib
 import json
+from typing import Any
 
 from .models import new_id, utc_now
 
@@ -206,8 +207,9 @@ class FederatedArtifactLedger:
                 f"line={line_number}:missing={','.join(sorted(missing))}",
             )
 
+        sequence_raw = entry["sequence"]
         try:
-            sequence = int(entry["sequence"])
+            sequence = int(str(sequence_raw))
         except (TypeError, ValueError) as exc:
             raise FederatedLedgerIntegrityError(
                 f"federation_ledger_invalid_sequence:line={line_number}",
@@ -245,7 +247,7 @@ class FederatedArtifactLedger:
         self,
         request: ArtifactExchangeRequest,
         decision: ArtifactExchangeDecision,
-    ) -> dict[str, str | int | dict[str, str | bool | tuple[str, ...]]]:
+    ) -> dict[str, Any]:
         payload = {
             "request": {
                 "exchange_id": request.exchange_id,

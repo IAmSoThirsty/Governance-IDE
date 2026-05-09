@@ -437,27 +437,23 @@ class ConstitutionalDatasetFoundry:
         if not chunks:
             raise ValueError("cannot build datasets without corpus chunks")
 
-        product_specs = {
-            "constitutional_pretraining_text_packs":
-                lambda chunk: True,
-            "doctrine_grounded_instruction_pairs":
-                lambda chunk: "general" not in chunk["doctrine_tags"],
-            "continuity_challenge_set":
-                lambda chunk: "continuity" in chunk["doctrine_tags"],
-            "identity_persistence_challenge_set":
-                lambda chunk: "identity" in chunk["doctrine_tags"],
-            "truth_vs_comfort_preference_set":
-                lambda chunk: "directness" in chunk["doctrine_tags"],
-            "adversarial_containment_challenge_set":
-                lambda chunk: (
-                    "adversarial" in chunk["doctrine_tags"]
-                    or "containment" in chunk["doctrine_tags"]
-                ),
-            "constitutional_refusal_set":
-                lambda chunk: (
-                    "quorum" in chunk["doctrine_tags"]
-                    or "repair" in chunk["doctrine_tags"]
-                ),
+        product_specs: dict[str, Callable[[dict[str, Any]], bool]] = {
+            "constitutional_pretraining_text_packs": lambda chunk: True,
+            "doctrine_grounded_instruction_pairs": lambda chunk: "general"
+            not in chunk["doctrine_tags"],
+            "continuity_challenge_set": lambda chunk: "continuity"
+            in chunk["doctrine_tags"],
+            "identity_persistence_challenge_set": lambda chunk: "identity"
+            in chunk["doctrine_tags"],
+            "truth_vs_comfort_preference_set": lambda chunk: "directness"
+            in chunk["doctrine_tags"],
+            "adversarial_containment_challenge_set": lambda chunk: (
+                "adversarial" in chunk["doctrine_tags"]
+                or "containment" in chunk["doctrine_tags"]
+            ),
+            "constitutional_refusal_set": lambda chunk: (
+                "quorum" in chunk["doctrine_tags"] or "repair" in chunk["doctrine_tags"]
+            ),
         }
 
         manifests: list[DatasetConstitutionManifest] = []
@@ -474,57 +470,55 @@ class ConstitutionalDatasetFoundry:
                 selected,
             )
 
+            source_artifact_ids = tuple(
+                sorted(
+                    {str(item["artifact_id"]) for item in selected},
+                ),
+            )
+            source_chunk_ids = tuple(str(item["chunk_id"]) for item in selected)
+            transform_steps = (
+                "canonical_segmentation",
+                "doctrine_tagging",
+                "constitutional_product_projection",
+            )
+            policy_flags = (
+                "no_cross_tenant_mix",
+                "default_deny_mutations",
+                "signed_manifest_required",
+            )
+            admission_signatures = tuple(
+                hashlib.sha256(
+                    f"{item['artifact_id']}:{item['chunk_id']}".encode(
+                        "utf-8",
+                    ),
+                ).hexdigest()
+                for item in selected
+            )
+            created_at = utc_now()
+
             unsigned_manifest = {
                 "dataset_id": dataset_id,
                 "product_name": product_name,
-                "source_artifact_ids": tuple(
-                    sorted(
-                        {
-                            item["artifact_id"]
-                            for item in selected
-                        },
-                    ),
-                ),
-                "source_chunk_ids": tuple(
-                    item["chunk_id"] for item in selected
-                ),
-                "transform_steps": (
-                    "canonical_segmentation",
-                    "doctrine_tagging",
-                    "constitutional_product_projection",
-                ),
-                "policy_flags": (
-                    "no_cross_tenant_mix",
-                    "default_deny_mutations",
-                    "signed_manifest_required",
-                ),
-                "admission_signatures": tuple(
-                    hashlib.sha256(
-                        f"{item['artifact_id']}:{item['chunk_id']}".encode(
-                            "utf-8",
-                        ),
-                    ).hexdigest()
-                    for item in selected
-                ),
+                "source_artifact_ids": source_artifact_ids,
+                "source_chunk_ids": source_chunk_ids,
+                "transform_steps": transform_steps,
+                "policy_flags": policy_flags,
+                "admission_signatures": admission_signatures,
                 "created_by": created_by,
-                "created_at": utc_now(),
+                "created_at": created_at,
             }
             signature = self.signer.sign(unsigned_manifest)
 
             manifest = DatasetConstitutionManifest(
                 dataset_id=dataset_id,
                 product_name=product_name,
-                source_artifact_ids=unsigned_manifest[
-                    "source_artifact_ids"
-                ],
-                source_chunk_ids=unsigned_manifest["source_chunk_ids"],
-                transform_steps=unsigned_manifest["transform_steps"],
-                policy_flags=unsigned_manifest["policy_flags"],
-                admission_signatures=unsigned_manifest[
-                    "admission_signatures"
-                ],
+                source_artifact_ids=source_artifact_ids,
+                source_chunk_ids=source_chunk_ids,
+                transform_steps=transform_steps,
+                policy_flags=policy_flags,
+                admission_signatures=admission_signatures,
                 created_by=created_by,
-                created_at=unsigned_manifest["created_at"],
+                created_at=created_at,
                 signature=to_primitive(signature),
             )
             manifests.append(manifest)
@@ -707,8 +701,7 @@ class TrainingOrchestrationCore:
         governance_metadata: dict[str, Any] | None,
     ) -> tuple[dict[str, Any], TrainingCheckpointRecord]:
         command = (
-            training_command
-            or os.getenv("SOVEREIGN_TRAINING_COMMAND", "").strip()
+            training_command or os.getenv("SOVEREIGN_TRAINING_COMMAND", "").strip()
         )
         if not command:
             raise ValueError(
@@ -1013,14 +1006,11 @@ class RuntimeContainmentPlane:
 
         allowed_syscalls = self.allowed_syscalls_by_action.get(action, set())
         unknown_syscalls = sorted(
-            syscall
-            for syscall in requested_syscalls
-            if syscall not in allowed_syscalls
+            syscall for syscall in requested_syscalls if syscall not in allowed_syscalls
         )
         if unknown_syscalls:
             reasons.append(
-                "unauthorized_syscalls:"
-                + ",".join(unknown_syscalls),
+                "unauthorized_syscalls:" + ",".join(unknown_syscalls),
             )
 
         for path_text in filesystem_write_paths:
@@ -1101,10 +1091,7 @@ class StateRegisterLedgerPlane:
             },
         )
 
-        if (
-            parent_checkpoint_id
-            and parent_checkpoint_id not in state["parents"]
-        ):
+        if parent_checkpoint_id and parent_checkpoint_id not in state["parents"]:
             raise ValueError("parent checkpoint not registered")
 
         if state["genesis_checkpoint_id"] is None:
@@ -1225,11 +1212,7 @@ class ConstitutionalCodeStore:
             {"units": [], "applied": []},
         )
         unit = next(
-            (
-                item
-                for item in state["units"]
-                if item["unit_id"] == unit_id
-            ),
+            (item for item in state["units"] if item["unit_id"] == unit_id),
             None,
         )
         if unit is None:
@@ -1270,35 +1253,39 @@ class PromotionDeploymentChamber:
         if not evaluation.passed:
             raise ValueError("checkpoint is not promotable: evaluation failed")
 
-        unique_approvals = tuple(sorted(set(approvals)))
-        quorum_met = len(unique_approvals) >= quorum_required
+        unique_approvals: tuple[str, ...] = tuple(sorted(set(approvals)))
+        quorum_met: bool = len(unique_approvals) >= quorum_required
         if not quorum_met:
             raise ValueError("promotion quorum not met")
 
-        unsigned_bundle = {
-            "promotion_id": new_id("promotion"),
+        promotion_id = new_id("promotion")
+        evidence_refs = (
+            checkpoint_id,
+            evaluation.evaluation_id,
+        )
+        signed_at = utc_now()
+
+        unsigned_bundle: dict[str, Any] = {
+            "promotion_id": promotion_id,
             "checkpoint_id": checkpoint_id,
             "evaluation_id": evaluation.evaluation_id,
             "charter_version": charter_version,
             "approvals": unique_approvals,
             "quorum_met": quorum_met,
-            "evidence_refs": (
-                checkpoint_id,
-                evaluation.evaluation_id,
-            ),
-            "signed_at": utc_now(),
+            "evidence_refs": evidence_refs,
+            "signed_at": signed_at,
         }
         signature = self.signer.sign(unsigned_bundle)
 
         bundle = PromotionBundle(
-            promotion_id=unsigned_bundle["promotion_id"],
+            promotion_id=promotion_id,
             checkpoint_id=checkpoint_id,
             evaluation_id=evaluation.evaluation_id,
             charter_version=charter_version,
             approvals=unique_approvals,
             quorum_met=quorum_met,
-            evidence_refs=unsigned_bundle["evidence_refs"],
-            signed_at=unsigned_bundle["signed_at"],
+            evidence_refs=evidence_refs,
+            signed_at=signed_at,
             signature=to_primitive(signature),
         )
 
@@ -1466,9 +1453,7 @@ class SovereignModelServerWorkshop:
         self.policy_path = (
             policy_path.resolve()
             if policy_path
-            else (
-                self.workspace_root / "policies/workshop_policy.json"
-            ).resolve()
+            else (self.workspace_root / "policies/workshop_policy.json").resolve()
         )
         self._ensure_policy_file()
 
@@ -1543,10 +1528,7 @@ class SovereignModelServerWorkshop:
                 state_dir / "workshop" / "training_artifact_contract.json"
             ),
             report_path=(
-                workspace_root
-                / "integration"
-                / "out"
-                / "workshop_report.json"
+                workspace_root / "integration" / "out" / "workshop_report.json"
             ),
         )
 
@@ -1599,9 +1581,7 @@ class SovereignModelServerWorkshop:
             scopes=scopes,
             trust_domain=trust_domain,
             issued_at=utc_now(),
-            expires_at=(
-                datetime.now(timezone.utc) + timedelta(minutes=30)
-            ).isoformat(),
+            expires_at=(datetime.now(timezone.utc) + timedelta(minutes=30)).isoformat(),
             revoked=False,
         )
 
@@ -1770,9 +1750,7 @@ class SovereignModelServerWorkshop:
 
             return {
                 "admitted_records": records,
-                "admitted_count": sum(
-                    1 for item in records if item["admitted"]
-                ),
+                "admitted_count": sum(1 for item in records if item["admitted"]),
                 "total_count": len(records),
             }
 
@@ -1848,7 +1826,7 @@ class SovereignModelServerWorkshop:
     def _strip_mutation_failure_prefix(reason: str) -> str:
         prefix = "mutation_execution_failed:"
         if reason.startswith(prefix):
-            return reason[len(prefix):]
+            return reason[len(prefix) :]
         return reason
 
     def _record_training_preflight_event(
@@ -1985,17 +1963,15 @@ class SovereignModelServerWorkshop:
             signature=str(signature["signature"]),
             signed_at=str(signature.get("signed_at") or utc_now()),
         )
-        unsigned = {
-            key: value
-            for key, value in ticket.items()
-            if key != "signature"
-        }
+        unsigned = {key: value for key, value in ticket.items() if key != "signature"}
         if not self.signer.verify(unsigned, envelope):
             return False, "base_model_ticket_signature_invalid"
 
         if str(ticket.get("model_id")) != str(base_model.model_id):
             return False, "base_model_ticket_model_mismatch"
-        if str(ticket.get("registry_entry_hash")) != sha256_hex(to_primitive(base_model)):
+        if str(ticket.get("registry_entry_hash")) != sha256_hex(
+            to_primitive(base_model)
+        ):
             return False, "base_model_ticket_registry_hash_mismatch"
         if str(ticket.get("policy_profile")) != str(base_model.policy_profile):
             return False, "base_model_ticket_policy_profile_mismatch"
@@ -2004,21 +1980,34 @@ class SovereignModelServerWorkshop:
         return True, "ok"
 
     @staticmethod
-    def _dataset_manifest_from_payload(payload: dict[str, Any]) -> DatasetConstitutionManifest:
+    def _dataset_manifest_from_payload(
+        payload: dict[str, Any]
+    ) -> DatasetConstitutionManifest:
         manifest = payload.get("manifest")
         if not isinstance(manifest, dict):
             raise ValueError("dataset_manifest_missing")
+
+        def _tuple_of_str(field_name: str) -> tuple[str, ...]:
+            raw = manifest.get(field_name)
+            if not isinstance(raw, (list, tuple)):
+                raise ValueError(f"dataset_manifest_{field_name}_missing")
+            return tuple(str(item) for item in raw)
+
+        signature_raw = manifest.get("signature")
+        if not isinstance(signature_raw, dict):
+            raise ValueError("dataset_manifest_signature_missing")
+
         return DatasetConstitutionManifest(
             dataset_id=str(manifest["dataset_id"]),
             product_name=str(manifest["product_name"]),
-            source_artifact_ids=tuple(manifest["source_artifact_ids"]),
-            source_chunk_ids=tuple(manifest["source_chunk_ids"]),
-            transform_steps=tuple(manifest["transform_steps"]),
-            policy_flags=tuple(manifest["policy_flags"]),
-            admission_signatures=tuple(manifest["admission_signatures"]),
+            source_artifact_ids=_tuple_of_str("source_artifact_ids"),
+            source_chunk_ids=_tuple_of_str("source_chunk_ids"),
+            transform_steps=_tuple_of_str("transform_steps"),
+            policy_flags=_tuple_of_str("policy_flags"),
+            admission_signatures=_tuple_of_str("admission_signatures"),
             created_by=str(manifest["created_by"]),
             created_at=str(manifest["created_at"]),
-            signature=dict(manifest["signature"]),
+            signature={str(key): str(value) for key, value in signature_raw.items()},
         )
 
     def _resolve_dataset_training_inputs(
@@ -2184,15 +2173,17 @@ class SovereignModelServerWorkshop:
             reasons.append("training_mode_invalid")
             mode = "unknown"
 
-        manifests, references, dataset_paths, dataset_reasons = self._resolve_dataset_training_inputs(
-            dataset_ids=dataset_ids,
-            dataset_ref=dataset_ref,
-            dataset_provenance=dataset_provenance,
-            dataset_source_type=dataset_source_type,
-            dataset_license=dataset_license,
-            dataset_hash=dataset_hash,
-            dataset_immutable_ref=dataset_immutable_ref,
-            dataset_immutable_proof=dataset_immutable_proof,
+        manifests, references, dataset_paths, dataset_reasons = (
+            self._resolve_dataset_training_inputs(
+                dataset_ids=dataset_ids,
+                dataset_ref=dataset_ref,
+                dataset_provenance=dataset_provenance,
+                dataset_source_type=dataset_source_type,
+                dataset_license=dataset_license,
+                dataset_hash=dataset_hash,
+                dataset_immutable_ref=dataset_immutable_ref,
+                dataset_immutable_proof=dataset_immutable_proof,
+            )
         )
         reasons.extend(dataset_reasons)
 
@@ -2216,18 +2207,20 @@ class SovereignModelServerWorkshop:
             mutable = reference.mutable_reference or (
                 reference.dataset_source_type in MUTABLE_DATASET_SOURCE_TYPES
             )
-            if trust_level in {"reviewed", "trusted"} and mutable and not reference.immutable_proof:
+            if (
+                trust_level in {"reviewed", "trusted"}
+                and mutable
+                and not reference.immutable_proof
+            ):
                 reasons.append(
                     f"mutable_dataset_requires_immutable_proof:{reference.dataset_id}",
                 )
 
         resolved_training_command = (
-            training_command
-            or os.getenv("SOVEREIGN_TRAINING_COMMAND", "").strip()
+            training_command or os.getenv("SOVEREIGN_TRAINING_COMMAND", "").strip()
         )
         resolved_training_backend = (
-            training_backend
-            or os.getenv("SOVEREIGN_TRAINING_BACKEND", "").strip()
+            training_backend or os.getenv("SOVEREIGN_TRAINING_BACKEND", "").strip()
         )
         resolved_artifact_store_uri = (
             artifact_store_uri
@@ -2257,9 +2250,15 @@ class SovereignModelServerWorkshop:
                     if base_model_record.admissibility_status != "admissible":
                         reasons.append("base_model_not_admissible")
 
-            if not base_model_execution_ticket and not base_model_admissibility_decision_id:
+            if (
+                not base_model_execution_ticket
+                and not base_model_admissibility_decision_id
+            ):
                 reasons.append("base_model_authorization_missing")
-            if base_model_execution_ticket is not None and base_model_record is not None:
+            if (
+                base_model_execution_ticket is not None
+                and base_model_record is not None
+            ):
                 valid_ticket, ticket_reason = self._verify_base_model_ticket(
                     base_model_execution_ticket,
                     base_model_record,
@@ -2281,7 +2280,10 @@ class SovereignModelServerWorkshop:
                 reasons.append("artifact_store_missing")
             else:
                 runtime_mode = str(self.settings.runtime_mode).lower()
-                if runtime_mode in {"production", "rehearsal"} and self._artifact_store_is_local(
+                if runtime_mode in {
+                    "production",
+                    "rehearsal",
+                } and self._artifact_store_is_local(
                     resolved_artifact_store_uri,
                 ):
                     reasons.append("artifact_store_not_durable")
@@ -2329,7 +2331,9 @@ class SovereignModelServerWorkshop:
                     "model_family": model_family,
                     "base_model_id": base_model_id,
                     "base_checkpoint": base_checkpoint,
-                    "dataset_references": [to_primitive(reference) for reference in references],
+                    "dataset_references": [
+                        to_primitive(reference) for reference in references
+                    ],
                     "policy_profile": str(policy_profile or "").strip(),
                     "trust_level": str(trust_level or "").strip(),
                     "artifact_store_uri": resolved_artifact_store_uri,
@@ -2415,8 +2419,7 @@ class SovereignModelServerWorkshop:
         reason_codes = list(preflight.reason_codes)
         if not evaluation.allowed:
             reason_codes.extend(
-                f"policy_{reason}"
-                for reason in evaluation.denial_reasons
+                f"policy_{reason}" for reason in evaluation.denial_reasons
             )
 
         merged_details = {
@@ -2503,9 +2506,7 @@ class SovereignModelServerWorkshop:
         def _mutate() -> dict[str, Any]:
             mode = preflight.mode
             event_started = (
-                "simulation_started"
-                if mode == "simulation"
-                else "training_started"
+                "simulation_started" if mode == "simulation" else "training_started"
             )
             dataset_reference_payload = [
                 to_primitive(reference)
@@ -2533,9 +2534,7 @@ class SovereignModelServerWorkshop:
                     base_checkpoint=base_checkpoint,
                     dataset_manifests=preflight_inputs["dataset_manifests"],
                     dataset_paths=preflight_inputs["dataset_paths"],
-                    execution_mode=(
-                        "simulated" if mode == "simulation" else "actual"
-                    ),
+                    execution_mode=("simulated" if mode == "simulation" else "actual"),
                     training_command=(
                         preflight_inputs["resolved_training_command"] or None
                     ),
@@ -2947,10 +2946,7 @@ class SovereignModelServerWorkshop:
             {"artifacts": []},
         )
         training_modes = sorted(
-            {
-                str(item.get("execution_mode", "unknown"))
-                for item in training_runs
-            },
+            {str(item.get("execution_mode", "unknown")) for item in training_runs},
         )
         report = {
             "generated_at": utc_now(),
@@ -2967,27 +2963,19 @@ class SovereignModelServerWorkshop:
             ).exists(),
             "policy_path": str(self.policy_path),
             "ingress_artifacts": len(
-                _load_json(self.paths.ingress_registry, {"artifacts": []})[
-                    "artifacts"
-                ],
+                _load_json(self.paths.ingress_registry, {"artifacts": []})["artifacts"],
             ),
             "datasets": len(
-                _load_json(self.paths.dataset_index, {"datasets": []})[
-                    "datasets"
-                ],
+                _load_json(self.paths.dataset_index, {"datasets": []})["datasets"],
             ),
             "training_runs": len(
                 training_runs,
             ),
             "evaluations": len(
-                _load_json(self.paths.evaluations, {"evaluations": []})[
-                    "evaluations"
-                ],
+                _load_json(self.paths.evaluations, {"evaluations": []})["evaluations"],
             ),
             "promotions": len(
-                _load_json(self.paths.promotions, {"bundles": []})[
-                    "bundles"
-                ],
+                _load_json(self.paths.promotions, {"bundles": []})["bundles"],
             ),
             "repair_units": len(
                 _load_json(self.paths.repair_store, {"units": []})["units"],
@@ -3002,10 +2990,6 @@ class SovereignModelServerWorkshop:
             ),
         }
 
-        destination = (
-            output_path.resolve()
-            if output_path
-            else self.paths.report_path
-        )
+        destination = output_path.resolve() if output_path else self.paths.report_path
         _save_json(destination, report)
         return report

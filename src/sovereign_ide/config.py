@@ -95,11 +95,7 @@ def _resolve_optional_path(root: Path, raw: str) -> Path | None:
 
 @lru_cache(maxsize=1)
 def get_settings(workspace_root: str | Path | None = None) -> Settings:
-    root = (
-        Path(workspace_root).resolve()
-        if workspace_root
-        else Path.cwd().resolve()
-    )
+    root = Path(workspace_root).resolve() if workspace_root else Path.cwd().resolve()
     _load_dotenv(root / ".env")
 
     policy_path_env = os.getenv(

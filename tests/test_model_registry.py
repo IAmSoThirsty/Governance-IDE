@@ -446,7 +446,9 @@ class ModelRegistryTests(unittest.TestCase):
         )
         self.assertEqual(record.admissibility_status, "restricted")
 
-    def test_mutable_endpoint_requires_explicit_immutable_proof_for_reviewed(self) -> None:
+    def test_mutable_endpoint_requires_explicit_immutable_proof_for_reviewed(
+        self,
+    ) -> None:
         settings = get_settings(self.root)
         registry = GovernedModelRegistry(settings.model_registry_path)
 
@@ -492,7 +494,9 @@ class ModelRegistryTests(unittest.TestCase):
 
         other_path = self.root / "other-model.bin"
         other_path.write_text("different-weights", encoding="utf-8")
-        with self.assertRaisesRegex(ValueError, "immutable_identifier already registered"):
+        with self.assertRaisesRegex(
+            ValueError, "immutable_identifier already registered"
+        ):
             registry.register(
                 source_type="local_path",
                 source=str(other_path),

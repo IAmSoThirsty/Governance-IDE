@@ -247,10 +247,14 @@ class SupplyChainRegistry:
         if not record.dependency_scan_passed:
             blockers.append("dependency_scan_failed")
 
-        if target_tier in {
-            PromotionTier.SOVEREIGN_APPROVED,
-            PromotionTier.ENCLAVE_ALLOWED,
-        } and not record.provenance_verified:
+        if (
+            target_tier
+            in {
+                PromotionTier.SOVEREIGN_APPROVED,
+                PromotionTier.ENCLAVE_ALLOWED,
+            }
+            and not record.provenance_verified
+        ):
             blockers.append("provenance_not_verified")
 
         if target_tier == PromotionTier.ENCLAVE_ALLOWED:

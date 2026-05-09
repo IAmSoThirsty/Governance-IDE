@@ -461,8 +461,7 @@ class FederationAndAirgapHardeningTests(unittest.TestCase):
         self.assertFalse(result.valid)
         self.assertTrue(
             any(
-                issue.startswith("invalid_checksum_format:")
-                for issue in result.errors
+                issue.startswith("invalid_checksum_format:") for issue in result.errors
             ),
         )
 

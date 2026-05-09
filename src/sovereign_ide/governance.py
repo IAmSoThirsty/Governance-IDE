@@ -56,15 +56,13 @@ class JournalIntegrityError(GovernanceError):
 class DecisionSigner(Protocol):
     key_id: str
 
-    def sign(self, payload: dict[str, Any]) -> SignatureEnvelope:
-        ...
+    def sign(self, payload: dict[str, Any]) -> SignatureEnvelope: ...
 
     def verify(
         self,
         payload: dict[str, Any],
         envelope: SignatureEnvelope,
-    ) -> bool:
-        ...
+    ) -> bool: ...
 
 
 @dataclass(frozen=True)
@@ -225,9 +223,7 @@ class HashChainJournal:
         return self._load_and_verify_entries()
 
     def replay_trace(self, trace_id: str) -> list[dict[str, Any]]:
-        return [
-            entry for entry in self.read_all() if entry["trace_id"] == trace_id
-        ]
+        return [entry for entry in self.read_all() if entry["trace_id"] == trace_id]
 
     @contextmanager
     def _journal_lock(self):
@@ -300,7 +296,9 @@ class Ed25519DecisionSigner:
     ) -> None:
         try:
             from cryptography.hazmat.primitives import serialization
-            from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+            from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+                Ed25519PrivateKey,
+            )
         except ImportError as exc:  # pragma: no cover - optional dependency
             raise RuntimeError(
                 "Ed25519 signing requires the cryptography package",
@@ -476,14 +474,12 @@ def _load_ed25519_private_key_material(settings: Any) -> str:
         path = Path(key_path)
         if not path.exists():
             raise ValueError(
-                "configured Ed25519 key file does not exist: "
-                f"{path}",
+                "configured Ed25519 key file does not exist: " f"{path}",
             )
         material = path.read_text(encoding="utf-8").strip()
         if not material:
             raise ValueError(
-                "configured Ed25519 key file is empty: "
-                f"{path}",
+                "configured Ed25519 key file is empty: " f"{path}",
             )
         return material
 
@@ -557,9 +553,8 @@ class PolicyEngine:
                 "required_mutation_class",
                 request.mutation_class.value,
             )
-            if (
-                MUTATION_ORDER[request.mutation_class.value]
-                < MUTATION_ORDER.get(required_class, 99)
+            if MUTATION_ORDER[request.mutation_class.value] < MUTATION_ORDER.get(
+                required_class, 99
             ):
                 denials.append("mutation_class_too_low")
 
@@ -763,10 +758,7 @@ class GovernanceRuntime:
         if not evaluation.allowed and not denials:
             denials.append("policy_disallowed")
 
-        if (
-            "quorum_proof_required" in obligations
-            and not mutation_binding.quorum_proof
-        ):
+        if "quorum_proof_required" in obligations and not mutation_binding.quorum_proof:
             denials.append("quorum_proof_missing")
 
         if denials:
@@ -837,9 +829,7 @@ class GovernanceRuntime:
             scopes=(compensation_action,),
             trust_domain=context.trust_domain,
             issued_at=utc_now(),
-            expires_at=(
-                datetime.now(timezone.utc) + timedelta(minutes=5)
-            ).isoformat(),
+            expires_at=(datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat(),
             revoked=False,
         )
 
@@ -1105,17 +1095,13 @@ class GovernanceRuntime:
 
         if binding.evaluation_binding.request_id != request.request_id:
             raise GovernanceError("evaluation binding request mismatch")
-        if (
-            binding.evaluation_binding.evaluation_id
-            != evaluation.evaluation_id
-        ):
+        if binding.evaluation_binding.evaluation_id != evaluation.evaluation_id:
             raise GovernanceError("evaluation binding evaluation mismatch")
 
         if binding.evaluation_binding.request_hash != sha256_hex(request):
             raise GovernanceError("evaluation binding request hash mismatch")
-        if (
-            binding.evaluation_binding.context_hash
-            != sha256_hex(binding.governance_context)
+        if binding.evaluation_binding.context_hash != sha256_hex(
+            binding.governance_context
         ):
             raise GovernanceError("evaluation binding context hash mismatch")
 
@@ -1138,42 +1124,52 @@ class GovernanceRuntime:
         reason: str,
     ) -> DecisionRecord:
         created_at = utc_now()
-        unsigned_payload = {
-            "decision_id": new_id("decision"),
-            "trace_id": binding.trace_id,
-            "action": binding.action,
-            "resource": binding.resource,
+        decision_id = new_id("decision")
+        trace_id = binding.trace_id
+        action = binding.action
+        resource = binding.resource
+        policy_evaluation_id = binding.policy_evaluation.evaluation_id
+        binding_id = binding.evaluation_binding.binding_id
+        capability_token_id = binding.capability_token.token_id
+        governance_context_hash = sha256_hex(binding.governance_context)
+        resolution_policy = binding.resolution_policy
+        quorum_proof = binding.quorum_proof
+        previous_decision_hash = self._last_decision_hash
+
+        unsigned_payload: dict[str, Any] = {
+            "decision_id": decision_id,
+            "trace_id": trace_id,
+            "action": action,
+            "resource": resource,
             "mutation_class": binding.mutation_class.value,
             "outcome": outcome.value,
             "reason": reason,
-            "policy_evaluation_id": binding.policy_evaluation.evaluation_id,
-            "binding_id": binding.evaluation_binding.binding_id,
-            "capability_token_id": binding.capability_token.token_id,
-            "governance_context_hash": sha256_hex(binding.governance_context),
-            "resolution_policy": binding.resolution_policy,
-            "quorum_proof": binding.quorum_proof,
-            "previous_decision_hash": self._last_decision_hash,
+            "policy_evaluation_id": policy_evaluation_id,
+            "binding_id": binding_id,
+            "capability_token_id": capability_token_id,
+            "governance_context_hash": governance_context_hash,
+            "resolution_policy": resolution_policy,
+            "quorum_proof": quorum_proof,
+            "previous_decision_hash": previous_decision_hash,
             "created_at": created_at,
         }
         signature = self.signer.sign(unsigned_payload)
 
         decision = DecisionRecord(
-            decision_id=unsigned_payload["decision_id"],
-            trace_id=unsigned_payload["trace_id"],
-            action=unsigned_payload["action"],
-            resource=unsigned_payload["resource"],
+            decision_id=decision_id,
+            trace_id=trace_id,
+            action=action,
+            resource=resource,
             mutation_class=binding.mutation_class,
             outcome=outcome,
             reason=reason,
-            policy_evaluation_id=unsigned_payload["policy_evaluation_id"],
-            binding_id=unsigned_payload["binding_id"],
-            capability_token_id=unsigned_payload["capability_token_id"],
-            governance_context_hash=(
-                unsigned_payload["governance_context_hash"]
-            ),
-            resolution_policy=unsigned_payload["resolution_policy"],
-            quorum_proof=unsigned_payload["quorum_proof"],
-            previous_decision_hash=unsigned_payload["previous_decision_hash"],
+            policy_evaluation_id=policy_evaluation_id,
+            binding_id=binding_id,
+            capability_token_id=capability_token_id,
+            governance_context_hash=governance_context_hash,
+            resolution_policy=resolution_policy,
+            quorum_proof=quorum_proof,
+            previous_decision_hash=previous_decision_hash,
             created_at=created_at,
             signature=signature,
         )
@@ -1194,11 +1190,7 @@ class GovernanceRuntime:
             trace_id=decision.trace_id,
             decision_id=decision.decision_id,
             event_type=event_type,
-            severity=(
-                "info"
-                if decision.outcome != DecisionOutcome.DENIED
-                else "warn"
-            ),
+            severity=("info" if decision.outcome != DecisionOutcome.DENIED else "warn"),
             details=details,
         )
         self.journal.append("audit_event", decision.trace_id, event)

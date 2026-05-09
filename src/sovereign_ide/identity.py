@@ -103,9 +103,7 @@ class TrustPosture:
         return all(status.healthy for status in self.dimensions)
 
     def degraded_dimensions(self) -> tuple[TrustDimensionStatus, ...]:
-        return tuple(
-            status for status in self.dimensions if not status.healthy
-        )
+        return tuple(status for status in self.dimensions if not status.healthy)
 
     def max_allowed_mutation_class(self) -> MutationClass:
         identity = self.dimension(TrustDimension.IDENTITY_VALIDITY)
@@ -114,11 +112,7 @@ class TrustPosture:
         posture = self.dimension(TrustDimension.POSTURE_VALIDITY)
         attestation = self.dimension(TrustDimension.ATTESTATION_FRESHNESS)
 
-        if (
-            not identity.healthy
-            or not provenance.healthy
-            or not policy.healthy
-        ):
+        if not identity.healthy or not provenance.healthy or not policy.healthy:
             return MutationClass.READ
         if not posture.healthy or not attestation.healthy:
             return MutationClass.SOFT_MUTATION
@@ -144,10 +138,7 @@ class IdentityAuthority:
     ) -> TrustPosture:
         now = as_of or _utc_now()
 
-        identity_ok = (
-            not bundle.revoked
-            and now < _parse_utc(bundle.expires_at)
-        )
+        identity_ok = not bundle.revoked and now < _parse_utc(bundle.expires_at)
         posture_ok = now < _parse_utc(bundle.posture_valid_until)
         provenance_ok = now < _parse_utc(bundle.provenance_valid_until)
         policy_ok = (
@@ -160,11 +151,7 @@ class IdentityAuthority:
             TrustDimensionStatus(
                 dimension=TrustDimension.IDENTITY_VALIDITY,
                 healthy=identity_ok,
-                reason=(
-                    "active"
-                    if identity_ok
-                    else "bundle_expired_or_revoked"
-                ),
+                reason=("active" if identity_ok else "bundle_expired_or_revoked"),
                 expires_at=bundle.expires_at,
             ),
             TrustDimensionStatus(
@@ -176,11 +163,7 @@ class IdentityAuthority:
             TrustDimensionStatus(
                 dimension=TrustDimension.PROVENANCE_VALIDITY,
                 healthy=provenance_ok,
-                reason=(
-                    "provenance_fresh"
-                    if provenance_ok
-                    else "provenance_stale"
-                ),
+                reason=("provenance_fresh" if provenance_ok else "provenance_stale"),
                 expires_at=bundle.provenance_valid_until,
             ),
             TrustDimensionStatus(
@@ -196,11 +179,7 @@ class IdentityAuthority:
             TrustDimensionStatus(
                 dimension=TrustDimension.ATTESTATION_FRESHNESS,
                 healthy=attestation_ok,
-                reason=(
-                    "attestation_fresh"
-                    if attestation_ok
-                    else "attestation_stale"
-                ),
+                reason=("attestation_fresh" if attestation_ok else "attestation_stale"),
                 expires_at=bundle.attestation_valid_until,
             ),
         )
@@ -227,10 +206,7 @@ class IdentityAuthority:
             raise PermissionError("identity dimension is not healthy")
 
         max_allowed = trust_posture.max_allowed_mutation_class()
-        if (
-            MUTATION_RANK[requested_mutation_class]
-            > MUTATION_RANK[max_allowed]
-        ):
+        if MUTATION_RANK[requested_mutation_class] > MUTATION_RANK[max_allowed]:
             raise PermissionError(
                 "requested mutation class exceeds trust posture allowance",
             )
@@ -241,11 +217,7 @@ class IdentityAuthority:
             for status in trust_posture.dimensions
             if status.healthy
         ]
-        posture_cap = (
-            min(max_expiry_candidates)
-            if max_expiry_candidates
-            else now
-        )
+        posture_cap = min(max_expiry_candidates) if max_expiry_candidates else now
         requested_expiry = now + timedelta(minutes=max(ttl_minutes, 1))
         expires_at = min(requested_expiry, posture_cap)
 

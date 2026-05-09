@@ -149,9 +149,7 @@ class ServiceApiTests(unittest.TestCase):
             daemon=True,
         )
         self.thread.start()
-        self.base_url = (
-            f"http://127.0.0.1:{self.server.server_address[1]}"
-        )
+        self.base_url = f"http://127.0.0.1:{self.server.server_address[1]}"
 
     def tearDown(self) -> None:
         self.server.shutdown()
@@ -211,7 +209,9 @@ class ServiceApiTests(unittest.TestCase):
             encoding="utf-8",
         )
 
-    def _workshop_context(self, actor: str, roles: tuple[str, ...]) -> GovernanceContext:
+    def _workshop_context(
+        self, actor: str, roles: tuple[str, ...]
+    ) -> GovernanceContext:
         return GovernanceContext(
             trace_id=new_id("trace"),
             actor_id=actor,
@@ -315,7 +315,9 @@ class ServiceApiTests(unittest.TestCase):
         self.assertIn("signer_backend", status)
 
         raw = json.dumps(status)
-        self.assertNotIn("cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", raw)
+        self.assertNotIn(
+            "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", raw
+        )
         self.assertNotIn("service-token-very-long-value", raw)
 
     def test_policy_evaluate_and_replay(self) -> None:
@@ -359,7 +361,9 @@ class ServiceApiTests(unittest.TestCase):
         models = self._get_json("/v1/models")
         self.assertEqual(models["models"], [])
 
-    def test_model_register_endpoint_registers_model_with_governed_response(self) -> None:
+    def test_model_register_endpoint_registers_model_with_governed_response(
+        self,
+    ) -> None:
         model_path = self.root / "registered_model.bin"
         model_path.write_text("weights", encoding="utf-8")
 
@@ -398,7 +402,9 @@ class ServiceApiTests(unittest.TestCase):
         self.assertEqual(len(listed["models"]), 1)
         self.assertEqual(listed["models"][0]["model_id"], model["model_id"])
 
-    def test_model_register_denies_mutable_endpoint_without_immutable_proof(self) -> None:
+    def test_model_register_denies_mutable_endpoint_without_immutable_proof(
+        self,
+    ) -> None:
         status, response = self._post_json_with_status(
             "/v1/models/register",
             {
@@ -454,7 +460,10 @@ class ServiceApiTests(unittest.TestCase):
         self.assertIn("source_journal", first)
         self.assertIn("payload", first)
         self.assertTrue(
-            any(item["record_type"] == "execution_ticket_denied" for item in events["events"]),
+            any(
+                item["record_type"] == "execution_ticket_denied"
+                for item in events["events"]
+            ),
         )
 
     def test_execution_ticket_endpoint_returns_signed_ticket(self) -> None:
@@ -761,7 +770,9 @@ class ServiceApiTests(unittest.TestCase):
             ),
         )
 
-    def test_execution_ticket_inspect_rejects_tampered_and_expired_tickets(self) -> None:
+    def test_execution_ticket_inspect_rejects_tampered_and_expired_tickets(
+        self,
+    ) -> None:
         model_id = self._register_reviewed_model()
         issued = self._post_json(
             "/v1/models/execution-ticket",
@@ -816,7 +827,9 @@ class ServiceApiTests(unittest.TestCase):
         self.assertFalse(response_expired["allowed"])
         self.assertEqual(response_expired["reason"], "ticket_expired")
 
-    def test_workshop_preflight_api_enforces_simulation_flag_with_journal_evidence(self) -> None:
+    def test_workshop_preflight_api_enforces_simulation_flag_with_journal_evidence(
+        self,
+    ) -> None:
         dataset_ids = self._prepare_workshop_dataset_ids()
 
         denied_trace = "trace_workshop_preflight_denied"
@@ -881,7 +894,9 @@ class ServiceApiTests(unittest.TestCase):
             ),
         )
 
-    def test_workshop_training_run_api_returns_simulation_mode_and_no_checkpoint_registration(self) -> None:
+    def test_workshop_training_run_api_returns_simulation_mode_and_no_checkpoint_registration(
+        self,
+    ) -> None:
         dataset_ids = self._prepare_workshop_dataset_ids()
         trace_id = "trace_workshop_run_simulation"
 

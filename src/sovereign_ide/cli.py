@@ -221,9 +221,7 @@ def cmd_simulate_mutation(args: argparse.Namespace) -> int:
         scopes=scopes,
         trust_domain=args.trust_domain,
         issued_at=utc_now(),
-        expires_at=(
-            datetime.now(timezone.utc) + timedelta(minutes=30)
-        ).isoformat(),
+        expires_at=(datetime.now(timezone.utc) + timedelta(minutes=30)).isoformat(),
         revoked=False,
     )
 
@@ -519,7 +517,7 @@ def _workshop_training_denial_reason(reason: str) -> str:
         "training_execution_failed:",
     ):
         if normalized.startswith(prefix):
-            normalized = normalized[len(prefix):]
+            normalized = normalized[len(prefix) :]
     return normalized
 
 
@@ -548,17 +546,11 @@ def _execute_workshop_train(
                 getattr(args, "base_model_admissibility_decision_id", "") or None
             ),
             dataset_ref=(getattr(args, "dataset_ref", "") or None),
-            dataset_provenance=(
-                getattr(args, "dataset_provenance", "") or None
-            ),
-            dataset_source_type=(
-                getattr(args, "dataset_source_type", "") or None
-            ),
+            dataset_provenance=(getattr(args, "dataset_provenance", "") or None),
+            dataset_source_type=(getattr(args, "dataset_source_type", "") or None),
             dataset_license=(getattr(args, "dataset_license", "") or None),
             dataset_hash=(getattr(args, "dataset_hash", "") or None),
-            dataset_immutable_ref=(
-                getattr(args, "dataset_immutable_ref", "") or None
-            ),
+            dataset_immutable_ref=(getattr(args, "dataset_immutable_ref", "") or None),
             dataset_immutable_proof=(
                 getattr(args, "dataset_immutable_proof", "") or None
             ),
@@ -572,9 +564,7 @@ def _execute_workshop_train(
             {
                 "allowed": False,
                 "mode": (
-                    "simulation"
-                    if execution_mode == "simulated"
-                    else "actual_training"
+                    "simulation" if execution_mode == "simulated" else "actual_training"
                 ),
                 "reason": _workshop_training_denial_reason(str(exc)),
             },
