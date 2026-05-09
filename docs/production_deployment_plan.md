@@ -9,7 +9,7 @@ deployment readiness.
 
 ## Hard Release Gates
 
-1. Python runtime is 3.11 or newer everywhere bootstrap, quality, preflight,
+1. Python runtime is 3.12 or newer everywhere bootstrap, quality, preflight,
    and release gates run.
 2. `SOVEREIGN_SIGNING_KEY` and `SOVEREIGN_SERVICE_TOKEN` are injected by a
    production secret manager or orchestrator, not committed and not loaded from

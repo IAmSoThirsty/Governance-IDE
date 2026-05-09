@@ -6,7 +6,7 @@ This runbook operationalizes integration of the Sovereign IDE governed runtime i
 
 ## Integration prerequisites
 
-- Runtime environment has Python >= 3.11.
+- Runtime environment has Python >= 3.12.
 - `.env` is present for local use (or equivalent production secret injection path).
 - `SOVEREIGN_SIGNING_KEY` is non-placeholder and >= 64 characters.
 - Required policy/governance/deployment artifacts exist.

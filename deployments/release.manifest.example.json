@@ -5,7 +5,7 @@
   "release_commit": "replace-with-release-commit",
   "release_tag": "v0.1.0",
   "registry_image_ref": "registry.example.com/sovereign/sovereign-ide-runtime:0.1.0",
-  "image_digest": "sha256:replacewith64hexcharactersfromthepushedimage",
+  "image_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   "runtime_mode": "production",
   "signer_type": "ed25519",
   "ed25519_key_source_type": "file_path",

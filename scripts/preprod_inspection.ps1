@@ -67,7 +67,7 @@ function Assert-PythonVersion {
     $major = [int]$parts[0]
     $minor = [int]$parts[1]
     if (($major -lt 3) -or (($major -eq 3) -and ($minor -lt 11))) {
-        throw "Python >= 3.11 is required; found $version at $FilePath"
+        throw "Python >= 3.12 is required; found $version at $FilePath"
     }
 }
 

@@ -16,7 +16,7 @@
     "production": {
       "description": "The release has passed all local gates and all external deployment prerequisites have concrete, non-placeholder values.",
       "required_evidence": [
-        "python >= 3.11",
+        "python >= 3.12",
         "valid repository artifacts",
         "local quality gate",
         "pre-production inspection",
