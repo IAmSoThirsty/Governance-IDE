@@ -12,6 +12,6 @@
     "audit:high": "npm audit --audit-level=high"
   },
   "devDependencies": {
-    "electron": "^39.8.10"
+    "electron": "^42.11.16"
   }
 }
